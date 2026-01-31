@@ -1,0 +1,16 @@
+# Database files (contains patient data - never commit)
+/database/*.db
+/database/*.db-journal
+/database/*.db-wal
+/database/*.db-shm
+
+# Keep database directory but not contents
+!/database/.gitkeep
+
+# OS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+.md

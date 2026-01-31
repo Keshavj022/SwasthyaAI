@@ -1,0 +1,13 @@
+# FastAPI Backend Dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+sqlalchemy==2.0.36
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# Database
+aiosqlite==0.20.0
+
+# CORS and security
+python-multipart==0.0.20
