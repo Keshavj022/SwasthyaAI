@@ -13,4 +13,4 @@
 # IDEs
 .vscode/
 .idea/
-.md
+*.md
