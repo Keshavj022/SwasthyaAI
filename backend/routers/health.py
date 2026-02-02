@@ -7,9 +7,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
+import sys
+from pathlib import Path
 
-from backend.database import get_db
-from backend.config import settings
+# Add parent directory to path to import sibling modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from database import get_db
+from config import settings
 
 router = APIRouter(prefix="/health", tags=["health"])
 

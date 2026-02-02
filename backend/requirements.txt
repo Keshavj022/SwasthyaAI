@@ -11,3 +11,6 @@ aiosqlite==0.20.0
 
 # CORS and security
 python-multipart==0.0.20
+
+# File handling
+python-magic==0.4.27

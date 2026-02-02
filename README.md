@@ -40,31 +40,59 @@ This system is a **multi-agent healthcare assistant** designed for:
 
 ```
 HospitalAgent/
-├── SAFETY_AND_SCOPE.md          # Medical safety boundaries (READ FIRST)
-├── README.md                     # This file
+├── SAFETY_AND_SCOPE.md                    # Medical safety boundaries (READ FIRST)
+├── README.md                               # This file
+├── IMPLEMENTATION_SUMMARY.md               # Communication Agent summary
+├── COMMUNICATION_AGENT_EXAMPLES.md         # API examples & workflows
+├── MEDGEMMA_INTEGRATION_GUIDE.md           # MedGemma integration guide
 ├── backend/
-│   ├── main.py                   # FastAPI application
-│   ├── config.py                 # Configuration
-│   ├── database.py               # SQLite setup
-│   ├── requirements.txt          # Python dependencies
-│   ├── models/                   # Database models
-│   │   └── system.py            # System health & audit models
-│   ├── routers/                  # API endpoints
-│   │   └── health.py            # Health check endpoint
-│   └── schemas/                  # Pydantic schemas (future)
+│   ├── main.py                             # FastAPI application
+│   ├── config.py                           # Configuration
+│   ├── database.py                         # SQLite setup
+│   ├── requirements.txt                    # Python dependencies
+│   ├── test_communication_agent.py         # Communication agent tests
+│   ├── models/                             # Database models
+│   │   ├── system.py                      # System health & audit models
+│   │   └── patient.py                     # Patient data models
+│   ├── routers/                            # API endpoints
+│   │   ├── health.py                      # Health check endpoint
+│   │   ├── orchestrator.py                # Multi-agent orchestrator
+│   │   ├── audit.py                       # Audit log queries
+│   │   ├── patients.py                    # Patient data management
+│   │   └── documents.py                   # Medical document vault
+│   ├── schemas/                            # Pydantic schemas
+│   │   ├── patient.py                     # Patient data schemas
+│   │   └── orchestrator.py                # Agent request/response schemas
+│   ├── agents/                             # AI Agents
+│   │   ├── prompts/
+│   │   │   └── medgemma_prompts.py        # MedGemma prompt templates
+│   │   ├── communication_agent.py         # Doctor-patient communication
+│   │   ├── health_memory_agent.py         # Patient history retrieval
+│   │   ├── explainability_agent.py        # Explainable AI
+│   │   └── [5 stub agents]                # Triage, diagnostic, etc.
+│   ├── orchestrator/                       # Agent Orchestration System
+│   │   ├── base.py                        # Base agent class
+│   │   ├── orchestrator.py                # Main coordinator
+│   │   ├── registry.py                    # Agent registry
+│   │   ├── intent_classifier.py           # Intent classification
+│   │   ├── safety_wrapper.py              # Safety & Guardrails Agent
+│   │   └── audit_logger.py                # Audit logging
+│   └── services/
+│       └── file_storage.py                # Document storage service
 ├── frontend/
 │   ├── app/
-│   │   ├── layout.tsx           # Root layout
-│   │   ├── page.tsx             # Home page with health dashboard
-│   │   └── globals.css          # Global styles
-│   ├── components/               # React components (future)
+│   │   ├── layout.tsx                     # Root layout
+│   │   ├── page.tsx                       # Home page with health dashboard
+│   │   └── globals.css                    # Global styles
+│   ├── components/                         # React components (future)
 │   ├── lib/
-│   │   └── api.ts               # API client
-│   ├── package.json             # Node dependencies
-│   ├── tsconfig.json            # TypeScript config
-│   └── next.config.ts           # Next.js config
+│   │   └── api.ts                         # API client
+│   ├── package.json                        # Node dependencies
+│   ├── tsconfig.json                       # TypeScript config
+│   └── next.config.ts                      # Next.js config
 └── database/
-    └── hospital.db              # SQLite database (created at runtime)
+    ├── hospital.db                         # SQLite database (created at runtime)
+    └── documents/                          # Medical document storage
 ```
 
 ## Prerequisites
@@ -203,13 +231,20 @@ All core functionality should work without internet connectivity.
 | `/api/health/ping` | GET | Quick connectivity test |
 | `/docs` | GET | Interactive API documentation (Swagger UI) |
 
+### Implemented Endpoints
+
+| Endpoint                  | Method  | Description                | Status        |
+|---------------------------|---------|----------------------------|---------------|
+| `/api/orchestrator/ask`   | POST    | Multi-agent orchestrator   | ✅ Complete   |
+| `/api/audit/logs`         | GET     | Query audit logs           | ✅ Complete   |
+| `/api/patients/*`         | Various | Patient data management    | ✅ Complete   |
+| `/api/documents/*`        | Various | Medical document vault     | ✅ Complete   |
+
 ### Future Endpoints (Coming Soon)
 
 - `/api/agents/diagnostic` - Diagnostic support agent
-- `/api/agents/image-analysis` - Medical image analysis
-- `/api/agents/triage` - Emergency triage classification
-- `/api/agents/drug-info` - Drug interaction checker
-- `/api/patients` - Patient record management
+- `/api/agents/image-analysis` - Medical image analysis (MedSigLIP)
+- `/api/agents/voice` - Voice interaction (MedASR)
 - `/api/appointments` - Appointment scheduling
 
 ## Database
@@ -389,31 +424,59 @@ This document defines:
 
 **All agents must comply with these safety boundaries.**
 
-## Next Steps
+## Implementation Status
 
-### Immediate (MVP)
-1. Implement Safety & Guardrails Agent (enforces SAFETY_AND_SCOPE.md)
-2. Implement Triage & Emergency Risk Agent
-3. Add user authentication and role-based access
-4. Implement basic patient record storage
+### ✅ Completed Components
 
-### Short-term (Core Agents)
-1. Diagnostic Support Agent (with MedGemma)
-2. Medical Image Analysis Agent (with MedSigLIP)
-3. Drug Interaction Checker
-4. Doctor-Patient Communication Agent
+1. **Agent Orchestration System**
+   - ✅ Multi-agent orchestrator with intent classification
+   - ✅ Safety & Guardrails Agent (enforces SAFETY_AND_SCOPE.md)
+   - ✅ Explainability & Audit Agent
+   - ✅ Comprehensive audit logging
 
-### Medium-term (Advanced Features)
-1. Voice Agent (MedASR integration)
-2. Appointment Scheduling Agent
-3. Medical Document Vault
-4. Personalized Health Memory Agent
+2. **Doctor-Patient Communication Agent** (MedGemma-powered)
+   - ✅ Medical Q&A
+   - ✅ Text simplification
+   - ✅ Visit summaries
+   - ✅ Lab results explanation
+   - ✅ Medication information
+   - ✅ Symptom assessment
+   - ⏭️ **Next:** Integrate real MedGemma model (see [MEDGEMMA_INTEGRATION_GUIDE.md](MEDGEMMA_INTEGRATION_GUIDE.md))
 
-### Long-term (Competition Polish)
-1. Offline PWA (Progressive Web App)
-2. Data export/import for hospital transfers
-3. Multi-language support
-4. Accessibility improvements (WCAG compliance)
+3. **Patient Data Management**
+   - ✅ Health Memory Agent (patient history retrieval)
+   - ✅ Patient records (demographics, visits, prescriptions, diagnoses, allergies, labs)
+   - ✅ Medical Document Vault (images, PDFs, DICOM files)
+
+### 🚧 Next Steps
+
+#### Immediate (Core Agents)
+
+1. **Integrate Real MedGemma** - Replace stub responses with actual model
+2. **Triage & Emergency Risk Agent** - Severity classification and emergency detection
+3. **Diagnostic Support Agent** - Differential diagnosis assistance
+4. **Medical Image Analysis Agent** - MedSigLIP integration for X-rays, CT scans
+
+#### Short-term (Frontend & UX)
+
+1. **User Authentication** - Role-based access (doctor/patient/admin)
+2. **Patient Dashboard** - Frontend for patient data visualization
+3. **Communication Interface** - Chat UI for doctor-patient communication
+4. **Document Viewer** - Medical image and PDF viewer
+
+#### Medium-term (Advanced Features)
+
+1. **Voice Agent** - MedASR integration for voice interaction
+2. **Drug Interaction Checker** - Enhanced medication safety
+3. **Appointment Scheduling** - Calendar and booking system
+4. **Offline PWA** - Progressive Web App for mobile devices
+
+#### Long-term (Competition Polish)
+
+1. **Multi-language Support** - Translate to patient's primary language
+2. **Data Export/Import** - Hospital transfer compatibility
+3. **Accessibility** - WCAG compliance for screen readers
+4. **Fine-tuning** - Custom medical models on hospital data
 
 ## Contributing
 

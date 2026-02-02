@@ -15,16 +15,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from backend.config import settings
-from backend.database import init_db
-from backend.routers import health
+from config import settings
+from database import init_db
+from routers import health
+from routers import orchestrator as orchestrator_router
+from routers import audit as audit_router
+from routers import patients as patients_router
+from routers import documents as documents_router
+from agents import register_all_agents
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
-    Initializes database on startup.
+    Initializes database and registers agents on startup.
     """
     print(f"\n🏥 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     print(f"📍 Environment: {settings.ENVIRONMENT}")
@@ -32,6 +37,11 @@ async def lifespan(app: FastAPI):
 
     # Initialize database
     init_db()
+
+    # Register all agents with orchestrator
+    register_all_agents()
+
+    print(f"🤖 Agent orchestrator ready\n")
 
     yield
 
@@ -58,6 +68,10 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health.router, prefix="/api")
+app.include_router(orchestrator_router.router, prefix="/api")
+app.include_router(audit_router.router, prefix="/api")
+app.include_router(patients_router.router, prefix="/api")
+app.include_router(documents_router.router, prefix="/api")
 
 
 @app.get("/")
@@ -69,6 +83,11 @@ async def root():
         "status": "operational",
         "docs": "/docs",
         "health": "/api/health",
+        "orchestrator": {
+            "query": "/api/orchestrator/query",
+            "agents": "/api/orchestrator/agents",
+            "health": "/api/orchestrator/health"
+        },
         "offline_mode": True,
     }
 
