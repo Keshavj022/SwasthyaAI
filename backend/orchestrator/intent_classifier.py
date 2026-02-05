@@ -63,8 +63,13 @@ class IntentClassifier:
         self.agent_patterns = {
             "triage": [
                 r"\b(emergency|urgent|pain|symptoms|sick|ill|feeling)\b",
-                r"\b(fever|cough|headache|nausea|vomiting|diarrhea)\b",
+                r"\b(fever|cough|headache|nausea|vomiting|diarrhea|sore throat)\b",
                 r"\b(how serious|should i worry|need doctor)\b",
+                r"\b(i have|i'm feeling|i feel|experiencing)\b",
+            ],
+            "health_support": [
+                r"\b(hello|hi|hey|greeting)\b",
+                r"\b(daily|check in|wellness|how am i)\b",
             ],
             "diagnostic_support": [
                 r"\b(diagnos\w*|condition|disease|what do i have)\b",

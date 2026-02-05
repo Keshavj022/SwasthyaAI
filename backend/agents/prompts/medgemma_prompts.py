@@ -478,3 +478,161 @@ Respond now:"""
 Respond now:"""
 
         return prompt
+
+    @staticmethod
+    def differential_diagnosis(
+        symptoms: List[str],
+        duration: Optional[str] = None,
+        severity: Optional[str] = None,
+        physical_exam: Optional[str] = None,
+        vital_signs: Optional[Dict] = None,
+        patient_context: Optional[Dict] = None
+    ) -> str:
+        """
+        Generate prompt for differential diagnosis generation.
+
+        Args:
+            symptoms: List of reported symptoms
+            duration: How long symptoms have been present
+            severity: Severity rating (mild/moderate/severe)
+            physical_exam: Physical examination findings
+            vital_signs: Vital sign measurements
+            patient_context: Patient information (age, conditions, medications, etc.)
+
+        Returns:
+            Formatted prompt for MedGemma
+        """
+        symptoms_str = ", ".join(symptoms) if symptoms else "None reported"
+
+        # Build clinical presentation
+        presentation_parts = [f"**Symptoms:** {symptoms_str}"]
+
+        if duration:
+            presentation_parts.append(f"**Duration:** {duration}")
+        if severity:
+            presentation_parts.append(f"**Severity:** {severity}")
+
+        # Format vital signs
+        if vital_signs:
+            vitals_items = []
+            if "temperature" in vital_signs:
+                vitals_items.append(f"Temp: {vital_signs['temperature']}°C")
+            if "blood_pressure_systolic" in vital_signs and "blood_pressure_diastolic" in vital_signs:
+                vitals_items.append(f"BP: {vital_signs['blood_pressure_systolic']}/{vital_signs['blood_pressure_diastolic']} mmHg")
+            if "heart_rate" in vital_signs:
+                vitals_items.append(f"HR: {vital_signs['heart_rate']} bpm")
+            if "respiratory_rate" in vital_signs:
+                vitals_items.append(f"RR: {vital_signs['respiratory_rate']} /min")
+            if "oxygen_saturation" in vital_signs:
+                vitals_items.append(f"SpO2: {vital_signs['oxygen_saturation']}%")
+
+            if vitals_items:
+                presentation_parts.append(f"**Vital Signs:** {', '.join(vitals_items)}")
+
+        if physical_exam:
+            presentation_parts.append(f"**Physical Exam:** {physical_exam}")
+
+        # Patient context
+        context_str = ""
+        if patient_context:
+            context_parts = []
+            if "age" in patient_context:
+                context_parts.append(f"Age: {patient_context['age']}")
+            if "gender" in patient_context:
+                context_parts.append(f"Gender: {patient_context['gender']}")
+            if "conditions" in patient_context:
+                context_parts.append(f"Medical History: {', '.join(patient_context['conditions'])}")
+            if "medications" in patient_context:
+                context_parts.append(f"Medications: {', '.join(patient_context['medications'])}")
+            if "allergies" in patient_context:
+                context_parts.append(f"Allergies: {', '.join(patient_context['allergies'])}")
+
+            if context_parts:
+                context_str = "\n**Patient Context:** " + "; ".join(context_parts) + "\n"
+
+        presentation_str = "\n".join(presentation_parts)
+
+        prompt = f"""You are a clinical decision support AI providing differential diagnosis assistance to healthcare providers. Your role is to suggest POSSIBLE conditions for consideration, NOT to provide definitive diagnoses.
+
+{context_str}
+**Clinical Presentation:**
+{presentation_str}
+
+**Task:**
+Generate a ranked list of differential diagnoses based on the clinical presentation. For each possible condition, provide:
+1. The condition name
+2. Likelihood ranking (Most Likely / Possible / Less Likely / Rare but Serious)
+3. Confidence score (0.0-1.0 based on symptom matching)
+4. Key features that support this diagnosis
+5. Key features that argue against this diagnosis
+6. Missing information needed to confirm or rule out
+
+**Instructions:**
+1. List diagnoses in order of likelihood (most likely first)
+2. Include 3-7 differential diagnoses
+3. Always include "rare but serious" conditions that must be ruled out
+4. Provide clinical reasoning for each diagnosis
+5. Highlight red flags or emergency conditions
+6. Identify critical missing information (labs, imaging, etc.)
+7. Suggest next diagnostic steps
+
+**Response Format:**
+Return a structured differential diagnosis with the following sections:
+
+DIFFERENTIAL DIAGNOSIS:
+1. [Most Likely Condition]
+   - Likelihood: Most Likely
+   - Confidence: [0.0-1.0]
+   - Supports: [Features consistent with this diagnosis]
+   - Against: [Features inconsistent with this diagnosis]
+   - Missing Info: [What's needed to confirm/exclude]
+
+2. [Alternative Consideration]
+   - Likelihood: Possible
+   - Confidence: [0.0-1.0]
+   - Supports: [Supporting features]
+   - Against: [Contradicting features]
+   - Missing Info: [Needed information]
+
+[Continue for 3-7 diagnoses total]
+
+RED FLAGS:
+- [Any emergency warning signs identified]
+- [Symptoms requiring immediate intervention]
+
+RECOMMENDED WORKUP:
+- [Lab tests to order]
+- [Imaging studies to consider]
+- [Specialist consultations if needed]
+
+CLINICAL CORRELATION NEEDED:
+- [Additional history questions]
+- [Physical exam findings to verify]
+- [Social/environmental factors to explore]
+
+**Critical Rules:**
+1. NEVER say "The patient has [condition]" - only "Possible," "Consider," "Differential includes"
+2. ALWAYS rank by likelihood but NEVER exclude serious conditions
+3. Use evidence-based medicine - reference typical presentations
+4. Acknowledge uncertainty and limitations of information provided
+5. Flag any emergency conditions immediately (at top of response)
+6. Be systematic: consider infectious, inflammatory, neoplastic, vascular, traumatic, metabolic causes
+7. Consider patient's age, gender, and medical history in likelihood assessment
+8. Never suggest this replaces clinical judgment
+
+**Emergency Conditions (always consider and flag if relevant):**
+- Acute coronary syndrome (chest pain, dyspnea, diaphoresis)
+- Pulmonary embolism (dyspnea, chest pain, hemoptysis)
+- Stroke/TIA (focal neurological deficits, altered mental status)
+- Meningitis (fever, headache, neck stiffness, altered mental status)
+- Sepsis (fever, tachycardia, hypotension, altered mental status)
+- Acute abdomen (severe abdominal pain, peritoneal signs)
+- Diabetic ketoacidosis (hyperglycemia, altered mental status, Kussmaul breathing)
+- Anaphylaxis (acute allergic reaction, airway compromise)
+
+**Important Disclaimer (always include):**
+"This differential diagnosis is for clinical decision support only. It does not replace comprehensive patient evaluation, clinical judgment, or diagnostic testing. All diagnoses must be confirmed through appropriate clinical assessment and investigations by a licensed healthcare provider."
+
+Respond now with differential diagnosis:"""
+
+        return prompt

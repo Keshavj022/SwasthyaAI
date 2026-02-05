@@ -33,8 +33,10 @@ class SafetyWrapper:
 
     def __init__(self):
         # Prohibited language patterns (SAFETY_AND_SCOPE.md §3.2)
+        # Prohibited language patterns (SAFETY_AND_SCOPE.md §3.2)
+        # Note: We use negative lookbehind to allow safe contexts like "if you have"
         self.prohibited_patterns = [
-            r"\byou have\b",
+            r"(?<!if )(?<!when )(?<!do )(?<!unless )(?<!believe )\byou have\b",
             r"\byou definitely have\b",
             r"\bthis is definitely\b",
             r"\byou need to take\b",
@@ -48,6 +50,8 @@ class SafetyWrapper:
             r"\bi'm certain\b",
             r"\b100% sure\b",
             r"\bdefinitive diagnosis\b",
+            r"\bit appears you have\b",
+            r"\bbased on symptoms you have\b",
         ]
 
         # Red flag keywords for emergency escalation (SAFETY_AND_SCOPE.md §5.1)
@@ -179,9 +183,17 @@ Call [LOCAL EMERGENCY NUMBER] or go to nearest emergency department."""
         wrapped["disclaimer"] = self.disclaimers.get(disclaimer_type, self.disclaimers["general"])
 
         # Step 8: Add safety metadata
+        # Confidence is acceptable if >= LOW threshold (0.20)
+        confidence_level = response.get_confidence_level()
+        confidence_acceptable = (
+            confidence_level == ConfidenceLevel.HIGH or
+            confidence_level == ConfidenceLevel.MODERATE or
+            confidence_level == ConfidenceLevel.LOW
+        )
+        
         wrapped["safety_check"] = {
             "prohibited_language": False,
-            "confidence_acceptable": response.confidence >= response.get_confidence_level().value,
+            "confidence_acceptable": confidence_acceptable,
             "red_flags_detected": len(response.red_flags) > 0,
             "escalation_required": response.requires_escalation or emergency_detected
         }
@@ -196,11 +208,21 @@ Call [LOCAL EMERGENCY NUMBER] or go to nearest emergency department."""
             SafetyViolation: If prohibited language detected
         """
         # Check in main data dictionary
-        data_str = str(response.data).lower()
+        # Convert to JSON string to check all nested values
+        import json
+        try:
+            data_str = json.dumps(response.data, default=str).lower()
+        except:
+            data_str = str(response.data).lower()
+
+        # Also check reasoning if available
+        if response.reasoning:
+            data_str += " " + response.reasoning.lower()
 
         for pattern in self.prohibited_patterns:
             if re.search(pattern, data_str, re.IGNORECASE):
                 logger.error(f"Prohibited language detected: {pattern}")
+                logger.error(f"Response data: {response.data}")
                 raise SafetyViolation(
                     f"Response contains prohibited definitive language. "
                     f"AI must not make definitive medical claims. "

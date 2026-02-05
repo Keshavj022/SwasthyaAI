@@ -10,6 +10,11 @@ from agents.diagnostic_support_agent import DiagnosticSupportAgent
 from agents.image_analysis_agent import ImageAnalysisAgent
 from agents.drug_info_agent import DrugInfoAgent
 from agents.communication_agent import CommunicationAgent
+from agents.health_support_agent import HealthSupportAgent
+from agents.health_memory_agent import HealthMemoryAgent
+from agents.appointment_agent import AppointmentAgent
+from agents.nearby_doctors_agent import NearbyDoctorsAgent
+from agents.voice_agent import VoiceAgent
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,6 +33,11 @@ def register_all_agents():
     registry.register(ImageAnalysisAgent())
     registry.register(DrugInfoAgent())
     registry.register(CommunicationAgent())
+    registry.register(HealthSupportAgent())
+    registry.register(HealthMemoryAgent())
+    registry.register(AppointmentAgent())
+    registry.register(NearbyDoctorsAgent())
+    registry.register(VoiceAgent())
 
     logger.info(f"✓ Registered {len(registry)} agents successfully")
 
@@ -43,5 +53,10 @@ __all__ = [
     "ImageAnalysisAgent",
     "DrugInfoAgent",
     "CommunicationAgent",
+    "HealthSupportAgent",
+    "HealthMemoryAgent",
+    "AppointmentAgent",
+    "NearbyDoctorsAgent",
+    "VoiceAgent",
     "register_all_agents"
 ]

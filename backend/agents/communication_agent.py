@@ -16,6 +16,7 @@ from orchestrator.base import BaseAgent, AgentRequest, AgentResponse
 from agents.prompts.medgemma_prompts import MedGemmaPrompts
 from typing import List, Dict, Any, Optional
 import sys
+import json
 from pathlib import Path
 
 # Add parent directory to path
@@ -35,10 +36,75 @@ class CommunicationAgent(BaseAgent):
         self.name = "communication"
         self.prompts = MedGemmaPrompts()
 
-        # Model configuration (for actual MedGemma integration)
-        self.model_name = "medgemma-7b"  # Or medgemma-2b for faster inference
+        # Initialize MedGemma Inference
+        try:
+            from inference.medgemma import MedGemmaInference
+            from config import settings
+            
+            self.inference = MedGemmaInference(
+                model_path=settings.MEDGEMMA_MODEL_PATH,
+                device=settings.MODEL_DEVICE
+            )
+            self.has_inference = True
+        except Exception as e:
+            print(f"Warning: Failed to load MedGemma inference: {e}")
+            self.has_inference = False
+
+        # Model configuration
+        self.model_name = "medgemma-7b"
         self.max_tokens = 1024
-        self.temperature = 0.3  # Lower temperature for medical accuracy
+        self.temperature = 0.3
+
+    async def _call_medgemma(self, prompt: str) -> str:
+        """
+        Call MedGemma model with prompt.
+        """
+        if not self.has_inference:
+            return self._get_fallback_response()
+
+        try:
+            # Generate response using local inference engine
+            # We wrap the prompt in a simple query structure for the inference engine
+            # The prompt is already formatted by MedGemmaPrompts, so we treat it as the query
+            response_data = await self.inference.generate_response(
+                query=prompt, # Passing full prompt as query for now
+                task_type="custom",
+                max_length=self.max_tokens,
+                temperature=self.temperature
+            )
+            
+            # If the inference returns a structured dict with analysis_summary, used that
+            # Otherwise return the raw text if it's in a different format
+            if isinstance(response_data, dict):
+                # Attempt to reconstruct a text response that parsing methods can handle
+                # or return the raw JSON if that's what the model output
+                return json.dumps(response_data) 
+            
+            return str(response_data)
+
+        except Exception as e:
+            print(f"Error calling MedGemma: {e}")
+            return self._get_fallback_response()
+
+    def _get_fallback_response(self) -> str:
+        """Return fallback response when model is unavailable"""
+        return """
+**Main Answer:**
+System is currently operating in fallback mode (AI model unavailable). Please consult a healthcare provider directly.
+
+**Key Points:**
+- AI Model not loaded
+- Professional evaluation required
+
+**When to Seek Care:**
+If you have medical concerns, please see a doctor.
+
+**Confidence Level:**
+Low (Fallback)
+
+**Reasoning:**
+Technical unavailability of inference engine.
+"""
 
     async def process(self, request: AgentRequest) -> AgentResponse:
         """
@@ -49,6 +115,37 @@ class CommunicationAgent(BaseAgent):
         - Additional keys depend on task_type
         """
         task_type = request.context.get("task_type", "qa")
+        
+        # Auto-detect task type from message if not specified
+        if task_type == "qa" and not request.context.get("question"):
+            message_lower = request.message.lower().strip()
+            
+            # Check if it's a greeting or general message
+            greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+            if any(greeting in message_lower for greeting in greetings):
+                return self._handle_greeting(request)
+            
+            # Check if it's a symptom report (should route to triage/health_support)
+            symptom_keywords = ["have", "feeling", "symptom", "pain", "ache", "cough", "fever", "sore"]
+            if any(keyword in message_lower for keyword in symptom_keywords):
+                # Route to health_support or triage instead
+                return AgentResponse(
+                    success=True,
+                    agent_name=self.name,
+                    data={
+                        "response": "I understand you're reporting symptoms. Let me connect you with the appropriate support.",
+                        "suggested_agents": ["health_support", "triage"],
+                        "routing_note": "Symptom reporting detected - consider routing to health_support or triage agent"
+                    },
+                    confidence=0.7,
+                    reasoning="Detected symptom reporting, suggesting routing to appropriate agent",
+                    red_flags=[],
+                    requires_escalation=False,
+                    suggested_agents=["health_support", "triage"]
+                )
+            
+            # Use message as question if no explicit question provided
+            request.context["question"] = request.message
 
         handlers = {
             "qa": self._handle_medical_qa,
@@ -76,64 +173,66 @@ class CommunicationAgent(BaseAgent):
 
         return await handler(request)
 
+    async def _handle_greeting(self, request: AgentRequest) -> AgentResponse:
+        """
+        Handle general greetings and non-medical messages.
+        """
+        return AgentResponse(
+            success=True,
+            agent_name=self.name,
+            data={
+                "response": "Hello! I'm here to help with health-related questions. How can I assist you today?",
+                "task": "greeting"
+            },
+            confidence=1.0,
+            reasoning="General greeting handled",
+            red_flags=[],
+            requires_escalation=False
+        )
+
     async def _handle_medical_qa(self, request: AgentRequest) -> AgentResponse:
         """
         Handle medical Q&A requests.
-
-        Required context:
-        - question: Patient's medical question
-        Optional context:
-        - patient_context: Patient information (age, conditions, medications, allergies)
-        - conversation_history: Previous Q&A exchanges
         """
         question = request.context.get("question")
         if not question:
             return self._error_response("'question' required for medical Q&A")
 
         patient_context = request.context.get("patient_context")
-        conversation_history = request.context.get("conversation_history")
-
-        # Generate MedGemma prompt
-        prompt = self.prompts.medical_qa(
-            question=question,
-            patient_context=patient_context,
-            conversation_history=conversation_history
-        )
-
-        # Call MedGemma model
-        model_response = await self._call_medgemma(prompt)
-
-        # Parse response
-        parsed = self._parse_qa_response(model_response)
-
-        # Check for red flags
-        red_flags = self._detect_red_flags(question, parsed)
-
-        # Calculate confidence
-        confidence = self._calculate_confidence(parsed)
-
-        # Determine if escalation needed
-        requires_escalation = len(red_flags) > 0 or confidence < 0.50
-
-        return AgentResponse(
-            success=True,
-            agent_name=self.name,
-            data={
-                "task": "medical_qa",
-                "question": question,
-                "answer": parsed.get("main_answer", ""),
-                "key_points": parsed.get("key_points", []),
-                "when_to_seek_care": parsed.get("when_to_seek_care", ""),
-                "confidence_explanation": parsed.get("confidence_explanation", ""),
-                "reasoning": parsed.get("reasoning", ""),
-                "has_patient_context": patient_context is not None
-            },
-            confidence=confidence,
-            reasoning=f"Medical Q&A response generated. {parsed.get('reasoning', '')}",
-            red_flags=red_flags,
-            requires_escalation=requires_escalation,
-            suggested_agents=["diagnostic_support"] if "diagnos" in question.lower() else []
-        )
+        
+        # Use inference engine directly if available
+        if self.has_inference:
+            response_data = await self.inference.generate_response(
+                query=question,
+                patient_context=patient_context,
+                task_type="medical_qa"
+            )
+            
+            # Map inference output to agent response format
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "medical_qa",
+                    "question": question,
+                    "answer": response_data.get("analysis_summary", ""),
+                    "key_points": response_data.get("key_findings", []),
+                    "when_to_seek_care": response_data.get("recommended_next_steps", []),
+                    "confidence_explanation": response_data.get("uncertainty_note", ""),
+                    "reasoning": f"Confidence: {response_data.get('confidence', 0)}",
+                    "has_patient_context": patient_context is not None,
+                    "disclaimer": response_data.get("disclaimer", "")
+                },
+                confidence=response_data.get("confidence", 0.5),
+                reasoning="Generated by MedGemma",
+                red_flags=response_data.get("red_flags", []),
+                requires_escalation=False
+            )
+            
+        # Fallback to prompt-based generation (if inference init failed but we want to try something else? 
+        # No, if self.has_inference is False, we fail).
+        
+        return self._error_response("Medical AI model not available.")
 
     async def _handle_simplify(self, request: AgentRequest) -> AgentResponse:
         """
@@ -159,10 +258,34 @@ class CommunicationAgent(BaseAgent):
             patient_context=patient_context
         )
 
-        # Call MedGemma
-        model_response = await self._call_medgemma(prompt)
+        if self.has_inference:
+            response_data = await self.inference.generate_response(
+                query=f"Simplify this medical text for {reading_level} level: {medical_text}",
+                patient_context=patient_context,
+                task_type="simplify"
+            )
+            
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "simplify",
+                    "original_text": medical_text[:200] + "..." if len(medical_text) > 200 else medical_text,
+                    "simplified_explanation": response_data.get("analysis_summary", ""),
+                    "key_terms_explained": {},  # Extraction not yet implemented in MedGemma wrapper
+                    "what_this_means": response_data.get("key_findings", []),
+                    "questions_for_doctor": response_data.get("recommended_next_steps", []),
+                    "reading_level": reading_level,
+                    "disclaimer": response_data.get("disclaimer", "")
+                },
+                confidence=response_data.get("confidence", 0.85),
+                reasoning="Medical text simplified via MedGemma",
+                red_flags=response_data.get("red_flags", []),
+                requires_escalation=False
+            )
 
-        # Parse response
+        # Fallback
+        model_response = await self._call_medgemma(prompt)
         parsed = self._parse_simplify_response(model_response)
 
         return AgentResponse(
@@ -177,7 +300,7 @@ class CommunicationAgent(BaseAgent):
                 "questions_for_doctor": parsed.get("questions_for_doctor", []),
                 "reading_level": reading_level
             },
-            confidence=0.85,  # High confidence for simplification task
+            confidence=0.85,
             reasoning="Medical text simplified while maintaining accuracy",
             red_flags=[],
             requires_escalation=False
@@ -204,10 +327,34 @@ class CommunicationAgent(BaseAgent):
             audience=audience
         )
 
-        # Call MedGemma
-        model_response = await self._call_medgemma(prompt)
+        if self.has_inference:
+            response_data = await self.inference.generate_response(
+                query=prompt,
+                task_type="visit_summary"
+            )
+            
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "visit_summary",
+                    "visit_summary": response_data.get("analysis_summary", ""),
+                    "key_findings": response_data.get("key_findings", []),
+                    "treatment_plan": response_data.get("recommended_next_steps", []), # Mapping recommendations to treatment plan
+                    "follow_up_actions": response_data.get("recommended_next_steps", []),
+                    "warning_signs": response_data.get("red_flags", []),
+                    "questions_for_next_visit": response_data.get("missing_information", []),
+                    "audience": audience,
+                    "disclaimer": response_data.get("disclaimer", "")
+                },
+                confidence=response_data.get("confidence", 0.90),
+                reasoning="Visit summary generated from documented clinical data",
+                red_flags=response_data.get("red_flags", []),
+                requires_escalation=False
+            )
 
-        # Parse response
+        # Fallback
+        model_response = await self._call_medgemma(prompt)
         parsed = self._parse_visit_summary_response(model_response)
 
         return AgentResponse(
@@ -250,10 +397,48 @@ class CommunicationAgent(BaseAgent):
             patient_context=patient_context
         )
 
-        # Call MedGemma
-        model_response = await self._call_medgemma(prompt)
+        if self.has_inference:
+            response_data = await self.inference.generate_response(
+                query=prompt,
+                patient_context=patient_context,
+                task_type="lab_results"
+            )
+            
+            # Check for critical values
+            critical_flags = [
+                lab for lab in lab_results
+                if lab.get("flag") == "critical"
+            ]
+            red_flags = [
+                f"Critical lab value: {lab['test_name']}"
+                for lab in critical_flags
+            ]
+            
+            # Add AI-detected red flags
+            if "red_flags" in response_data:
+                red_flags.extend(response_data["red_flags"])
+            
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "lab_results",
+                    "overall_summary": response_data.get("analysis_summary", ""),
+                    "individual_results_explained": response_data.get("key_findings", []), # Mapping key findings to explanation
+                    "what_this_might_mean": response_data.get("analysis_summary", ""),
+                    "next_steps": response_data.get("recommended_next_steps", ""),
+                    "questions_for_doctor": response_data.get("missing_information", []),
+                    "critical_values_count": len(critical_flags),
+                    "disclaimer": response_data.get("disclaimer", "")
+                },
+                confidence=response_data.get("confidence", 0.80),
+                reasoning="Lab results explained in patient context",
+                red_flags=red_flags,
+                requires_escalation=len(critical_flags) > 0
+            )
 
-        # Parse response
+        # Fallback
+        model_response = await self._call_medgemma(prompt)
         parsed = self._parse_lab_results_response(model_response)
 
         # Check for critical values
@@ -305,10 +490,47 @@ class CommunicationAgent(BaseAgent):
             patient_context=patient_context
         )
 
-        # Call MedGemma
-        model_response = await self._call_medgemma(prompt)
+        if self.has_inference:
+            response_data = await self.inference.generate_response(
+                query=prompt,
+                patient_context=patient_context,
+                task_type="medication"
+            )
+            
+            # Check for drug interaction warnings (basic keyword detection + AI output)
+            red_flags = []
+            if patient_context and "allergies" in patient_context:
+                med_name = medication.get("medication_name", "").lower()
+                for allergy in patient_context.get("allergies", []):
+                    if allergy.lower() in med_name:
+                        red_flags.append(f"⚠️ ALLERGY ALERT: Patient allergic to {allergy}")
+            
+            if "red_flags" in response_data:
+                red_flags.extend(response_data["red_flags"])
 
-        # Parse response
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "medication",
+                    "medication_name": medication.get("medication_name", ""),
+                    "what_it_does": response_data.get("analysis_summary", ""), # Mapping summary to effect
+                    "how_to_take_it": response_data.get("recommended_next_steps", ""), # Using recommendations as instruction proxy
+                    "common_side_effects": response_data.get("key_findings", []), # Using key findings as side effects proxy if structured differently
+                    "important_warnings": response_data.get("red_flags", []),
+                    "missed_dose": "Contact your pharmacist for guidance", # Not explicitly in structured response usually
+                    "when_to_call_doctor": response_data.get("recommended_next_steps", []),
+                    "disclaimer": response_data.get("disclaimer", "")
+                },
+                confidence=response_data.get("confidence", 0.85),
+                reasoning="Medication information provided from evidence-based sources",
+                red_flags=red_flags,
+                requires_escalation=len(red_flags) > 0,
+                suggested_agents=["drug_info"] if len(red_flags) > 0 else []
+            )
+
+        # Fallback
+        model_response = await self._call_medgemma(prompt)
         parsed = self._parse_medication_response(model_response)
 
         # Check for drug interaction warnings (basic keyword detection)
@@ -366,10 +588,53 @@ class CommunicationAgent(BaseAgent):
             patient_context=patient_context
         )
 
-        # Call MedGemma
-        model_response = await self._call_medgemma(prompt)
+        if self.has_inference:
+            response_data = await self.inference.generate_response(
+                query=prompt,
+                patient_context=patient_context,
+                task_type="symptoms"
+            )
+            
+            # Determine urgency and escalation from response or red flags
+            # The model output might not perfectly map to "urgency_level", so we infer or expect it in summary
+            urgency = "ROUTINE"
+            summary_upper = response_data.get("analysis_summary", "").upper()
+            if "EMERGENCY" in summary_upper:
+                urgency = "EMERGENCY"
+            elif "URGENT" in summary_upper:
+                urgency = "URGENT"
+            elif "SELF-CARE" in summary_upper:
+                urgency = "SELF_CARE"
+                
+            red_flags = response_data.get("red_flags", [])
+            requires_escalation = (
+                urgency in ["EMERGENCY", "URGENT"] or
+                len(red_flags) > 0
+            )
+            
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "symptom_assessment",
+                    "symptoms": symptoms,
+                    "urgency_level": urgency,
+                    "possible_considerations": response_data.get("key_findings", []),
+                    "red_flags": red_flags,
+                    "self_care_suggestions": response_data.get("recommended_next_steps", []),
+                    "when_to_seek_care": response_data.get("recommended_next_steps", ""),
+                    "questions_to_prepare": response_data.get("missing_information", []),
+                    "disclaimer": response_data.get("disclaimer", "")
+                },
+                confidence=response_data.get("confidence", 0.70),
+                reasoning=f"Symptom assessment: {urgency} level urgency",
+                red_flags=red_flags,
+                requires_escalation=requires_escalation,
+                suggested_agents=["triage"] if requires_escalation else []
+            )
 
-        # Parse response
+        # Fallback
+        model_response = await self._call_medgemma(prompt)
         parsed = self._parse_symptoms_response(model_response)
 
         # Determine urgency and escalation

@@ -80,6 +80,15 @@ class Orchestrator:
             intent = self.classifier.classify(request)
             logger.info(f"Intent classified: {intent}")
 
+            # Step 2.5: Add context from intent classification
+            # This helps agents understand what type of request this is
+            if not request.context:
+                request.context = {}
+            
+            # Add message as question for communication agent if needed
+            if intent.primary_agent == "communication" and "question" not in request.context:
+                request.context["question"] = request.message
+            
             # Step 3: Get agent from registry
             agent = self.registry.get(intent.primary_agent)
 
@@ -116,6 +125,13 @@ class Orchestrator:
                 return self._error_response(
                     "The AI generated a response that violates safety boundaries. "
                     "This has been logged. Please rephrase your query."
+                )
+            except Exception as e:
+                # Catch any errors in safety wrapper (e.g., type errors)
+                logger.error(f"Error in safety wrapper: {str(e)}")
+                logger.error(traceback.format_exc())
+                return self._error_response(
+                    f"An error occurred while applying safety checks. Error: {str(e)}"
                 )
 
             # Step 6: Generate explainability metadata
@@ -249,10 +265,21 @@ class Orchestrator:
         Returns:
             Error response dict
         """
+        from datetime import datetime
         return {
             "success": False,
-            "error": message,
-            "disclaimer": self.safety_wrapper.disclaimers["general"]
+            "agent": None,
+            "timestamp": datetime.utcnow().isoformat(),
+            "confidence": None,
+            "data": {
+                "error": message
+            },
+            "reasoning": None,
+            "disclaimer": self.safety_wrapper.disclaimers["general"],
+            "audit_id": None,
+            "emergency": False,
+            "intent": None,
+            "safety_check": None
         }
 
 
