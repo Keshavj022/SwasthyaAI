@@ -28,7 +28,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Import models to ensure they are registered with Base.metadata
-from models import patient, system, health_monitoring, directory
+from models import patient, system, health_monitoring, directory, user
 
 
 def get_db():

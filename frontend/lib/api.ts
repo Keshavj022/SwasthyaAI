@@ -1,275 +1,546 @@
 /**
- * Centralized API service layer for the Hospital AI frontend.
+ * Centralized API service layer for SwasthyaAI.
  *
+ * Typed Axios client with auth interceptors.
  * All agent interactions route through the orchestrator endpoint.
- * Designed for offline-first operation: every call returns a typed
- * result-or-error wrapper so the UI can degrade gracefully.
  */
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+import axios from 'axios'
+import type {
+  User,
+  Patient,
+  Appointment,
+  Message,
+  AgentResponse,
+  HealthCheckIn,
+  MedicalDocument,
+  AuditLog,
+  LabResult,
+} from '@/types'
 
 // ---------------------------------------------------------------------------
-// Shared types
+// Additional payload / response types not in shared types
 // ---------------------------------------------------------------------------
 
-/** Wraps every API call so callers never need try/catch. */
+export interface RegisterPayload {
+  full_name: string
+  email: string
+  password: string
+  role: 'doctor' | 'patient' | 'admin'
+}
+
+/** Shape returned by the backend auth endpoints (snake_case) */
+interface BackendUser {
+  id: string
+  email: string
+  full_name: string
+  role: string
+  is_active: boolean
+  created_at: string
+}
+
+function normalizeUser(u: BackendUser): User {
+  return {
+    id: u.id,
+    name: u.full_name,
+    email: u.email,
+    role: u.role as 'doctor' | 'patient' | 'admin',
+    createdAt: u.created_at,
+  }
+}
+
+export interface DoctorAvailability {
+  doctorId: string
+  doctorName: string
+  specialty: string
+  slots: string[]
+}
+
+export interface BookAppointmentPayload {
+  patientId: string
+  doctorId: string
+  dateTime: string
+  type: string
+  notes?: string
+}
+
+export interface SystemHealth {
+  status: string
+  application: string
+  version: string
+  environment: string
+  timestamp: string
+  database: {
+    status: string
+    file_exists: boolean
+    type: string
+  }
+  offline_mode: {
+    enabled: boolean
+    description: string
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Re-export legacy types used by existing pages
+// ---------------------------------------------------------------------------
+
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string; offline: boolean };
+  | { ok: false; error: string; offline: boolean }
 
-/** Common envelope returned by POST /api/orchestrator/query. */
 export interface QueryResponse<TData = Record<string, unknown>> {
-  success: boolean;
-  agent: string | null;
-  timestamp: string;
-  confidence: { score: number; level: string } | null;
-  data: TData;
-  reasoning: string | null;
-  disclaimer: string;
-  audit_id: string | null;
-  emergency: boolean | null;
-  intent: Record<string, unknown> | null;
-  safety_check: Record<string, unknown> | null;
+  success: boolean
+  agent: string | null
+  timestamp: string
+  confidence: { score: number; level: string } | null
+  data: TData
+  reasoning: string | null
+  disclaimer: string
+  audit_id: string | null
+  emergency: boolean | null
+  intent: Record<string, unknown> | null
+  safety_check: Record<string, unknown> | null
 }
 
-// ---------------------------------------------------------------------------
-// Agent-specific data shapes
-// ---------------------------------------------------------------------------
-
-/** health_support / chat agent */
 export interface ChatResponseData {
-  response?: string;
-  task?: string;
-  alerts?: string[];
-  recommendations?: string[];
-  [key: string]: unknown;
+  response?: string
+  task?: string
+  alerts?: string[]
+  recommendations?: string[]
+  [key: string]: unknown
 }
 
-/** diagnostic_support agent */
 export interface DiagnosticDiagnosis {
-  rank: number;
-  condition: string;
-  likelihood: string;
-  confidence: number;
-  supporting_features: string;
-  contradicting_features: string;
-  missing_information: string;
+  rank: number
+  condition: string
+  likelihood: string
+  confidence: number
+  supporting_features: string
+  contradicting_features: string
+  missing_information: string
 }
 
 export interface DiagnosticResponseData {
-  differential_diagnoses: DiagnosticDiagnosis[];
-  red_flags: string[];
-  recommended_workup: string[];
-  clinical_correlation_needed: string[];
-  most_likely_diagnosis: string;
-  symptoms_analyzed: string[];
-  emergency_detected: boolean;
-  total_diagnoses_considered: number;
-  disclaimer: string;
+  differential_diagnoses: DiagnosticDiagnosis[]
+  red_flags: string[]
+  recommended_workup: string[]
+  clinical_correlation_needed: string[]
+  most_likely_diagnosis: string
+  symptoms_analyzed: string[]
+  emergency_detected: boolean
+  total_diagnoses_considered: number
+  disclaimer: string
 }
 
-/** image_analysis agent */
 export interface ImageFinding {
-  finding: string;
-  location: string;
-  size?: string;
-  severity: string;
-  confidence: number;
-  description: string;
-  differential: string[];
+  finding: string
+  location: string
+  size?: string
+  severity: string
+  confidence: number
+  description: string
+  differential: string[]
 }
 
 export interface ImageRegion {
-  region: string;
-  coordinates: { x: number; y: number; width: number; height: number };
-  description: string;
+  region: string
+  coordinates: { x: number; y: number; width: number; height: number }
+  description: string
 }
 
 export interface ImageResponseData {
-  modality: string;
-  analysis_type: string;
-  image_quality: string;
-  findings: ImageFinding[];
-  regions_of_interest: ImageRegion[];
-  overall_impression: string;
-  clinical_correlation: string[];
-  recommended_next_steps: string[];
-  limitations: string[];
-  disclaimer: string;
+  modality: string
+  analysis_type: string
+  image_quality: string
+  findings: ImageFinding[]
+  regions_of_interest: ImageRegion[]
+  overall_impression: string
+  clinical_correlation: string[]
+  recommended_next_steps: string[]
+  limitations: string[]
+  disclaimer: string
 }
 
-/** voice agent */
 export interface TranscriptionWord {
-  word: string;
-  confidence: number;
-  start_time: number;
-  end_time: number;
+  word: string
+  confidence: number
+  start_time: number
+  end_time: number
 }
 
 export interface TranscriptionResponseData {
-  mode: string;
-  language: string;
-  transcription: string;
-  confidence: number;
-  audio_duration_seconds: number;
-  words_detected: TranscriptionWord[];
-  medical_terms_identified: string[];
-  alternative_transcriptions: string[];
-  next_action: string;
-  disclaimer: string;
+  mode: string
+  language: string
+  transcription: string
+  confidence: number
+  audio_duration_seconds: number
+  words_detected: TranscriptionWord[]
+  medical_terms_identified: string[]
+  alternative_transcriptions: string[]
+  next_action: string
+  disclaimer: string
 }
 
-/** health_memory agent */
 export interface PatientInfo {
-  patient_id: string;
-  name: string;
-  age: number;
-  gender: string;
-  blood_type: string;
+  patient_id: string
+  name: string
+  age: number
+  gender: string
+  blood_type: string
 }
 
 export interface HealthMemoryResponseData {
-  patient_info: PatientInfo;
+  patient_info: PatientInfo
   active_prescriptions: {
-    medication: string;
-    dosage: string;
-    frequency: string;
-    prescribed_date: string;
-  }[];
+    medication: string
+    dosage: string
+    frequency: string
+    prescribed_date: string
+  }[]
   active_diagnoses: {
-    diagnosis_name: string;
-    icd10_code: string;
-    status: string;
-    diagnosis_date: string;
-  }[];
+    diagnosis_name: string
+    icd10_code: string
+    status: string
+    diagnosis_date: string
+  }[]
   allergies: {
-    allergen: string;
-    reaction: string;
-    severity: string;
-  }[];
+    allergen: string
+    reaction: string
+    severity: string
+  }[]
   recent_visits: {
-    visit_date: string;
-    visit_type: string;
-    chief_complaint: string;
-    provider_name: string;
-  }[];
-  [key: string]: unknown;
+    visit_date: string
+    visit_type: string
+    chief_complaint: string
+    provider_name: string
+  }[]
+  [key: string]: unknown
+}
+
+export interface AuditLogEntry {
+  audit_id: string
+  timestamp: string
+  agent_name: string
+  confidence_score: number | null
+  explainability_score: number | null
+  escalation_triggered: string | null
+  reasoning_summary: string | null
+  reviewed: boolean
+}
+
+export interface AuditLogsResponse {
+  total_results: number
+  filters_applied: {
+    agent_name: string | null
+    min_confidence: number | null
+    escalations_only: boolean
+    hours: number
+  }
+  logs: AuditLogEntry[]
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Axios instance
 // ---------------------------------------------------------------------------
 
+const TOKEN_KEY = 'swasthya_token'
+
+export const apiClient = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000',
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 30_000,
+})
+
+// Request interceptor: attach Bearer token
+apiClient.interceptors.request.use((config) => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem(TOKEN_KEY)
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+  }
+  return config
+})
+
+// Response interceptor: on 401 clear token and redirect
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem(TOKEN_KEY)
+      window.location.href = '/login'
+    }
+    return Promise.reject(error)
+  }
+)
+
+// ---------------------------------------------------------------------------
+// Auth API
+// ---------------------------------------------------------------------------
+
+export const authApi = {
+  login: async (email: string, password: string, _role?: string): Promise<{ token: string; user: User }> => {
+    const { data } = await apiClient.post('/api/auth/login', { email, password })
+    return { token: data.access_token, user: normalizeUser(data.user) }
+  },
+
+  register: async (payload: RegisterPayload): Promise<{ token: string; user: User }> => {
+    const { data } = await apiClient.post('/api/auth/register', payload)
+    return { token: data.access_token, user: normalizeUser(data.user) }
+  },
+
+  me: async (): Promise<User> => {
+    const { data } = await apiClient.get('/api/auth/me')
+    return normalizeUser(data)
+  },
+
+  logout: (): void => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(TOKEN_KEY)
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator / Chat API
+// ---------------------------------------------------------------------------
+
+export const orchestratorApi = {
+  ask: async (
+    query: string,
+    patientId?: string,
+    context?: Record<string, unknown>
+  ): Promise<AgentResponse> => {
+    const { data } = await apiClient.post('/api/orchestrator/query', {
+      message: query,
+      patient_id: patientId,
+      context,
+    })
+    // Normalise backend envelope → AgentResponse
+    return {
+      response: data.data?.response ?? data.data?.task ?? '',
+      agentUsed: data.agent ?? 'unknown',
+      confidence: data.confidence?.score ?? 0,
+      disclaimer: data.disclaimer ?? '',
+      reasoning: data.reasoning ?? undefined,
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Patient API
+// ---------------------------------------------------------------------------
+
+export const patientApi = {
+  getAll: async (): Promise<Patient[]> => {
+    const { data } = await apiClient.get('/api/patients')
+    return data
+  },
+
+  getById: async (id: string): Promise<Patient> => {
+    const { data } = await apiClient.get(`/api/patients/${id}`)
+    return data
+  },
+
+  create: async (payload: Partial<Patient>): Promise<Patient> => {
+    const { data } = await apiClient.post('/api/patients', payload)
+    return data
+  },
+
+  update: async (id: string, payload: Partial<Patient>): Promise<Patient> => {
+    const { data } = await apiClient.put(`/api/patients/${id}`, payload)
+    return data
+  },
+
+  getHealthHistory: async (patientId: string): Promise<HealthCheckIn[]> => {
+    const { data } = await apiClient.get(`/api/patients/${patientId}/health-history`)
+    return data
+  },
+
+  submitCheckIn: async (patientId: string, payload: Partial<HealthCheckIn>): Promise<HealthCheckIn> => {
+    const { data } = await apiClient.post(`/api/patients/${patientId}/check-in`, payload)
+    return data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Appointment API
+// ---------------------------------------------------------------------------
+
+export const appointmentApi = {
+  getAvailability: async (specialty?: string, doctorName?: string): Promise<DoctorAvailability[]> => {
+    const params = new URLSearchParams()
+    if (specialty) params.append('specialty', specialty)
+    if (doctorName) params.append('doctor_name', doctorName)
+    const { data } = await apiClient.get(`/api/appointments/availability?${params}`)
+    return data
+  },
+
+  book: async (payload: BookAppointmentPayload): Promise<Appointment> => {
+    const { data } = await apiClient.post('/api/appointments', payload)
+    return data
+  },
+
+  getByPatient: async (patientId: string): Promise<Appointment[]> => {
+    const { data } = await apiClient.get(`/api/appointments?patient_id=${patientId}`)
+    return data
+  },
+
+  reschedule: async (appointmentId: string, newDateTime: string): Promise<Appointment> => {
+    const { data } = await apiClient.patch(`/api/appointments/${appointmentId}`, { dateTime: newDateTime })
+    return data
+  },
+
+  cancel: async (appointmentId: string): Promise<{ success: boolean }> => {
+    const { data } = await apiClient.delete(`/api/appointments/${appointmentId}`)
+    return data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Document API
+// ---------------------------------------------------------------------------
+
+export const documentApi = {
+  upload: async (patientId: string, file: File): Promise<MedicalDocument> => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('patient_id', patientId)
+    const { data } = await apiClient.post('/api/documents/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return data
+  },
+
+  getByPatient: async (patientId: string): Promise<MedicalDocument[]> => {
+    const { data } = await apiClient.get(`/api/documents?patient_id=${patientId}`)
+    return data
+  },
+
+  delete: async (documentId: string): Promise<{ success: boolean }> => {
+    const { data } = await apiClient.delete(`/api/documents/${documentId}`)
+    return data
+  },
+
+  getUrl: (documentId: string): string => {
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+    return `${base}/api/documents/${documentId}/download`
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Audit API
+// ---------------------------------------------------------------------------
+
+export const auditApi = {
+  getLogs: async (params?: {
+    limit?: number
+    offset?: number
+    agentType?: string
+  }): Promise<{ logs: AuditLog[]; total: number }> => {
+    const qs = new URLSearchParams()
+    if (params?.limit !== undefined) qs.append('limit', String(params.limit))
+    if (params?.offset !== undefined) qs.append('offset', String(params.offset))
+    if (params?.agentType) qs.append('agent_name', params.agentType)
+    const { data } = await apiClient.get(`/api/audit/logs?${qs}`)
+    // Normalise backend shape → { logs, total }
+    return {
+      logs: data.logs ?? data,
+      total: data.total_results ?? data.total ?? (data.logs ?? data).length,
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Health API
+// ---------------------------------------------------------------------------
+
+export const healthApi = {
+  check: async (): Promise<SystemHealth> => {
+    const { data } = await apiClient.get('/api/health')
+    return data
+  },
+
+  ping: async (): Promise<{ status: string }> => {
+    const { data } = await apiClient.get('/api/health/ping')
+    return data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Legacy fetch-based helpers (kept for backward-compat with existing pages)
+// ---------------------------------------------------------------------------
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+
 function isNetworkError(err: unknown): boolean {
-  if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
-    return true;
-  }
-  if (err instanceof DOMException && err.name === "AbortError") {
-    return true;
-  }
-  return false;
+  if (err instanceof TypeError && /fetch|network/i.test(err.message)) return true
+  if (err instanceof DOMException && err.name === 'AbortError') return true
+  return false
 }
 
 async function orchestratorQuery<TData>(
   message: string,
   userId: string,
-  options?: {
-    attachments?: string[];
-    context?: Record<string, unknown>;
-    timeoutMs?: number;
-  }
+  options?: { attachments?: string[]; context?: Record<string, unknown>; timeoutMs?: number }
 ): Promise<ApiResult<QueryResponse<TData>>> {
-  const url = `${API_BASE_URL}/api/orchestrator/query`;
-
+  const url = `${API_BASE_URL}/api/orchestrator/query`
   try {
     const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        message,
-        attachments: options?.attachments,
-        context: options?.context,
-      }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, message, attachments: options?.attachments, context: options?.context }),
       signal: AbortSignal.timeout(options?.timeoutMs ?? 30_000),
-    });
-
+    })
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      return {
-        ok: false,
-        error: `HTTP ${response.status}: ${text || response.statusText}`,
-        offline: false,
-      };
+      const text = await response.text().catch(() => '')
+      return { ok: false, error: `HTTP ${response.status}: ${text || response.statusText}`, offline: false }
     }
-
-    const data: QueryResponse<TData> = await response.json();
-    return { ok: true, data };
+    return { ok: true, data: await response.json() }
   } catch (err) {
-    const offline = isNetworkError(err);
+    const offline = isNetworkError(err)
     return {
       ok: false,
       error: offline
-        ? "Cannot reach the backend. The system is operating offline."
+        ? 'Cannot reach the backend. The system is operating offline.'
         : err instanceof Error
           ? err.message
-          : "Unknown error",
+          : 'Unknown error',
       offline,
-    };
+    }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public API methods
-// ---------------------------------------------------------------------------
-
-/**
- * Send a free-text chat message to the health support agent.
- *
- * The orchestrator routes the message based on intent — it may hit the
- * health_support, triage, or diagnostic agent depending on content.
- */
 export async function sendChatMessage(
   message: string,
   userId: string,
   context?: Record<string, unknown>
 ): Promise<ApiResult<QueryResponse<ChatResponseData>>> {
-  return orchestratorQuery<ChatResponseData>(message, userId, { context });
+  return orchestratorQuery<ChatResponseData>(message, userId, { context })
 }
 
-/**
- * Run a differential-diagnosis session.
- *
- * Provides structured symptom data so the orchestrator routes directly
- * to the diagnostic_support agent.
- */
 export async function runDiagnostics(
   params: {
-    symptoms: string[];
-    duration?: string;
-    severity?: string;
+    symptoms: string[]
+    duration?: string
+    severity?: string
     vitalSigns?: {
-      heart_rate?: number;
-      blood_pressure_systolic?: number;
-      blood_pressure_diastolic?: number;
-      temperature?: number;
-      respiratory_rate?: number;
-      oxygen_saturation?: number;
-    };
-    patientContext?: {
-      age?: number;
-      gender?: string;
-      conditions?: string[];
-      medications?: string[];
-    };
+      heart_rate?: number
+      blood_pressure_systolic?: number
+      blood_pressure_diastolic?: number
+      temperature?: number
+      respiratory_rate?: number
+      oxygen_saturation?: number
+    }
+    patientContext?: { age?: number; gender?: string; conditions?: string[]; medications?: string[] }
   },
   userId: string
 ): Promise<ApiResult<QueryResponse<DiagnosticResponseData>>> {
-  const message = `Diagnose: ${params.symptoms.join(", ")}`;
+  const message = `Diagnose: ${params.symptoms.join(', ')}`
   return orchestratorQuery<DiagnosticResponseData>(message, userId, {
     context: {
-      task: "differential_diagnosis",
+      task: 'differential_diagnosis',
       symptoms: params.symptoms,
       duration: params.duration,
       severity: params.severity,
@@ -277,256 +548,102 @@ export async function runDiagnostics(
       patient_context: params.patientContext,
     },
     timeoutMs: 60_000,
-  });
+  })
 }
 
-/**
- * Upload a medical image for analysis.
- *
- * Reads the file into a base64 string and sends it as context so the
- * orchestrator routes to the image_analysis agent.
- */
 export async function uploadImage(
   file: File,
   userId: string,
   options?: {
-    modality?: string;
-    clinicalContext?: string;
-    analysisType?:
-      | "finding_detection"
-      | "abnormality_classification"
-      | "region_description";
+    modality?: string
+    clinicalContext?: string
+    analysisType?: 'finding_detection' | 'abnormality_classification' | 'region_description'
   }
 ): Promise<ApiResult<QueryResponse<ImageResponseData>>> {
   const base64 = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1] ?? result);
-    };
-    reader.onerror = () => reject(new Error("Failed to read image file"));
-    reader.readAsDataURL(file);
-  });
-
+    const reader = new FileReader()
+    reader.onload = () => { const r = reader.result as string; resolve(r.split(',')[1] ?? r) }
+    reader.onerror = () => reject(new Error('Failed to read image file'))
+    reader.readAsDataURL(file)
+  })
   const message = options?.clinicalContext
     ? `Analyze this medical image: ${options.clinicalContext}`
-    : "Analyze this medical image";
-
+    : 'Analyze this medical image'
   return orchestratorQuery<ImageResponseData>(message, userId, {
-    context: {
-      image_data: base64,
-      modality: options?.modality ?? "other",
-      analysis_type: options?.analysisType ?? "finding_detection",
-      clinical_context: options?.clinicalContext,
-    },
+    context: { image_data: base64, modality: options?.modality ?? 'other', analysis_type: options?.analysisType ?? 'finding_detection', clinical_context: options?.clinicalContext },
     timeoutMs: 60_000,
-  });
+  })
 }
 
-/**
- * Transcribe an audio recording via the voice agent.
- *
- * Reads the audio blob into base64 and sends it with the desired
- * transcription mode.
- */
 export async function transcribeAudio(
   audioBlob: Blob,
   userId: string,
-  options?: {
-    mode?:
-      | "symptom_reporting"
-      | "medical_dictation"
-      | "voice_query"
-      | "general";
-    language?: string;
-  }
+  options?: { mode?: 'symptom_reporting' | 'medical_dictation' | 'voice_query' | 'general'; language?: string }
 ): Promise<ApiResult<QueryResponse<TranscriptionResponseData>>> {
   const base64 = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1] ?? result);
-    };
-    reader.onerror = () => reject(new Error("Failed to read audio data"));
-    reader.readAsDataURL(audioBlob);
-  });
-
-  return orchestratorQuery<TranscriptionResponseData>(
-    "Transcribe this audio",
-    userId,
-    {
-      context: {
-        audio_data: base64,
-        mode: options?.mode ?? "general",
-        language: options?.language ?? "en-US",
-      },
-      timeoutMs: 60_000,
-    }
-  );
+    const reader = new FileReader()
+    reader.onload = () => { const r = reader.result as string; resolve(r.split(',')[1] ?? r) }
+    reader.onerror = () => reject(new Error('Failed to read audio data'))
+    reader.readAsDataURL(audioBlob)
+  })
+  return orchestratorQuery<TranscriptionResponseData>('Transcribe this audio', userId, {
+    context: { audio_data: base64, mode: options?.mode ?? 'general', language: options?.language ?? 'en-US' },
+    timeoutMs: 60_000,
+  })
 }
 
-/**
- * Fetch a patient's health memory / medical history summary.
- */
 export async function fetchHealthMemory(
   patientId: string,
   userId: string,
-  queryType:
-    | "summary"
-    | "timeline"
-    | "medications"
-    | "allergies"
-    | "conditions" = "summary"
+  queryType: 'summary' | 'timeline' | 'medications' | 'allergies' | 'conditions' = 'summary'
 ): Promise<ApiResult<QueryResponse<HealthMemoryResponseData>>> {
-  return orchestratorQuery<HealthMemoryResponseData>(
-    `Show patient medical ${queryType}`,
-    userId,
-    {
-      context: {
-        patient_id: patientId,
-        query_type: queryType,
-      },
-    }
-  );
+  return orchestratorQuery<HealthMemoryResponseData>(`Show patient medical ${queryType}`, userId, {
+    context: { patient_id: patientId, query_type: queryType },
+  })
 }
 
-// ---------------------------------------------------------------------------
-// Utility endpoints (direct REST, not orchestrator)
-// ---------------------------------------------------------------------------
-
-/** Quick connectivity check against the backend health endpoint. */
-export async function checkBackendHealth(): Promise<
-  ApiResult<{
-    status: string;
-    application: string;
-    version: string;
-    timestamp: string;
-  }>
-> {
+export async function checkBackendHealth(): Promise<ApiResult<{ status: string; application: string; version: string; timestamp: string }>> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/health`, {
-      signal: AbortSignal.timeout(5_000),
-    });
-
-    if (!response.ok) {
-      return { ok: false, error: `HTTP ${response.status}`, offline: false };
-    }
-
-    return { ok: true, data: await response.json() };
+    const response = await fetch(`${API_BASE_URL}/api/health`, { signal: AbortSignal.timeout(5_000) })
+    if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, offline: false }
+    return { ok: true, data: await response.json() }
   } catch (err) {
-    return {
-      ok: false,
-      error: "Backend unreachable",
-      offline: isNetworkError(err),
-    };
+    return { ok: false, error: 'Backend unreachable', offline: isNetworkError(err) }
   }
 }
 
-/** List all registered agents and their capabilities. */
-export async function listAgents(): Promise<
-  ApiResult<{
-    total_agents: number;
-    agents: {
-      name: string;
-      description: string;
-      capabilities: string[];
-      enabled: boolean;
-      confidence_threshold: number;
-    }[];
-  }>
-> {
+export async function listAgents(): Promise<ApiResult<{ total_agents: number; agents: { name: string; description: string; capabilities: string[]; enabled: boolean; confidence_threshold: number }[] }>> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/orchestrator/agents`, {
-      signal: AbortSignal.timeout(5_000),
-    });
-
-    if (!response.ok) {
-      return { ok: false, error: `HTTP ${response.status}`, offline: false };
-    }
-
-    return { ok: true, data: await response.json() };
+    const response = await fetch(`${API_BASE_URL}/api/orchestrator/agents`, { signal: AbortSignal.timeout(5_000) })
+    if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, offline: false }
+    return { ok: true, data: await response.json() }
   } catch (err) {
-    return {
-      ok: false,
-      error: "Backend unreachable",
-      offline: isNetworkError(err),
-    };
+    return { ok: false, error: 'Backend unreachable', offline: isNetworkError(err) }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Audit log types and API
-// ---------------------------------------------------------------------------
-
-export interface AuditLogEntry {
-  audit_id: string;
-  timestamp: string;
-  agent_name: string;
-  confidence_score: number | null;
-  explainability_score: number | null;
-  escalation_triggered: string | null;
-  reasoning_summary: string | null;
-  reviewed: boolean;
-}
-
-export interface AuditLogsResponse {
-  total_results: number;
-  filters_applied: {
-    agent_name: string | null;
-    min_confidence: number | null;
-    escalations_only: boolean;
-    hours: number;
-  };
-  logs: AuditLogEntry[];
-}
-
-/**
- * Fetch audit logs with optional filtering.
- */
 export async function fetchAuditLogs(options?: {
-  agent_name?: string;
-  min_confidence?: number;
-  escalations_only?: boolean;
-  hours?: number;
-  limit?: number;
+  agent_name?: string
+  min_confidence?: number
+  escalations_only?: boolean
+  hours?: number
+  limit?: number
 }): Promise<ApiResult<AuditLogsResponse>> {
-  const params = new URLSearchParams();
-  if (options?.agent_name) params.append("agent_name", options.agent_name);
-  if (options?.min_confidence !== undefined)
-    params.append("min_confidence", options.min_confidence.toString());
-  if (options?.escalations_only)
-    params.append("escalations_only", "true");
-  if (options?.hours) params.append("hours", options.hours.toString());
-  if (options?.limit) params.append("limit", options.limit.toString());
-
+  const params = new URLSearchParams()
+  if (options?.agent_name) params.append('agent_name', options.agent_name)
+  if (options?.min_confidence !== undefined) params.append('min_confidence', options.min_confidence.toString())
+  if (options?.escalations_only) params.append('escalations_only', 'true')
+  if (options?.hours) params.append('hours', options.hours.toString())
+  if (options?.limit) params.append('limit', options.limit.toString())
   try {
-    const response = await fetch(
-      `${API_BASE_URL}/api/audit/logs?${params.toString()}`,
-      {
-        signal: AbortSignal.timeout(10_000),
-      }
-    );
-
+    const response = await fetch(`${API_BASE_URL}/api/audit/logs?${params.toString()}`, { signal: AbortSignal.timeout(10_000) })
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      return {
-        ok: false,
-        error: `HTTP ${response.status}: ${text || response.statusText}`,
-        offline: false,
-      };
+      const text = await response.text().catch(() => '')
+      return { ok: false, error: `HTTP ${response.status}: ${text || response.statusText}`, offline: false }
     }
-
-    return { ok: true, data: await response.json() };
+    return { ok: true, data: await response.json() }
   } catch (err) {
-    const offline = isNetworkError(err);
-    return {
-      ok: false,
-      error: offline
-        ? "Cannot reach the backend. The system is operating offline."
-        : err instanceof Error
-          ? err.message
-          : "Unknown error",
-      offline,
-    };
+    const offline = isNetworkError(err)
+    return { ok: false, error: offline ? 'Cannot reach the backend. The system is operating offline.' : err instanceof Error ? err.message : 'Unknown error', offline }
   }
 }

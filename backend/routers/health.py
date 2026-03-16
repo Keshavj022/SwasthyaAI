@@ -4,6 +4,7 @@ Verifies system status, database connectivity, and offline readiness.
 """
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
@@ -33,7 +34,7 @@ async def health_check(db: Session = Depends(get_db)):
     # Check database connectivity
     db_status = "connected"
     try:
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
     except Exception as e:
         db_status = f"error: {str(e)}"
 
