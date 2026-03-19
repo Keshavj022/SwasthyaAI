@@ -29,8 +29,9 @@ export interface Appointment {
   id: string
   patientId: string
   doctorId: string
+  doctorName?: string
   dateTime: string
-  status: 'scheduled' | 'completed' | 'cancelled' | 'pending'
+  status: 'scheduled' | 'completed' | 'cancelled' | 'pending' | 'confirmed'
   type: string
   notes?: string
 }
@@ -39,7 +40,7 @@ export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
-  agentType: string
+  agentType?: string
   timestamp: string
   confidence?: number
 }

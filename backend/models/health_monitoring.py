@@ -2,7 +2,7 @@
 Health Monitoring models for Health Support Agent.
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Date, JSON, ForeignKey, Text, Float, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Date, JSON, ForeignKey, Text, Float, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import sys
@@ -15,6 +15,7 @@ from database import Base
 class CheckIn(Base):
     """Daily wellness check-in record"""
     __tablename__ = "check_ins"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_checkin_user_date"),)
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, index=True, nullable=False)

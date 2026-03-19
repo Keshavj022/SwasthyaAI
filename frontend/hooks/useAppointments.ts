@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { appointmentApi } from '@/lib/api'
+import { appointmentApi, apiClient } from '@/lib/api'
 import type { DoctorAvailability, BookAppointmentPayload } from '@/lib/api'
 import type { Appointment } from '@/types'
 
@@ -53,5 +53,16 @@ export function useCancelAppointment() {
     onSuccess: (_, { patientId }) => {
       qc.invalidateQueries({ queryKey: appointmentKeys.byPatient(patientId) })
     },
+  })
+}
+
+export function useDoctorAppointments(doctorId: string) {
+  return useQuery<Appointment[], Error>({
+    queryKey: ['appointments', 'doctor', doctorId] as const,
+    queryFn: async () => {
+      const { data } = await apiClient.get<Appointment[]>(`/api/appointments?doctor_id=${doctorId}`)
+      return data
+    },
+    enabled: !!doctorId,
   })
 }

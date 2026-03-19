@@ -13,13 +13,16 @@ Provides comprehensive patient data management:
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from pydantic import BaseModel
 import sys
 from pathlib import Path
+from datetime import date as date_type
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database import get_db
+from models.health_monitoring import CheckIn
 from models.patient import Patient, Visit, Prescription, Diagnosis, Allergy
 from schemas.patient import (
     PatientCreate, PatientUpdate, PatientResponse,
@@ -30,6 +33,15 @@ from schemas.patient import (
     TimelineResponse, PatientSummaryResponse
 )
 from agents.health_memory_agent import HealthMemoryAgent
+
+
+class CheckInCreate(BaseModel):
+    mood: Optional[int] = None       # 1-10
+    energy: Optional[int] = None     # 1-10
+    sleep: Optional[float] = None    # hours
+    symptoms: List[str] = []
+    painLevel: Optional[int] = None  # 1-10
+
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -585,3 +597,74 @@ async def list_allergies(
         raise HTTPException(status_code=404, detail=f"Patient '{patient_id}' not found")
 
     return allergies
+
+
+# ==================== HEALTH CHECK-INS ====================
+
+
+@router.get("/{patient_id}/health-history")
+async def get_health_history(
+    patient_id: str,
+    limit: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db),
+):
+    """Return last N daily check-ins for a patient (user_id = patient_id)."""
+    rows = (
+        db.query(CheckIn)
+        .filter(CheckIn.user_id == patient_id)
+        .order_by(CheckIn.date.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "patientId": r.user_id,
+            "mood": r.mood,
+            "energy": r.energy_level,
+            "sleep": r.sleep_hours,
+            "symptoms": r.symptoms or [],
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "date": r.date.isoformat() if r.date else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/{patient_id}/check-in", status_code=201)
+async def submit_check_in(
+    patient_id: str,
+    payload: CheckInCreate,
+    db: Session = Depends(get_db),
+):
+    """Save a daily check-in for a patient. Upserts on today's date."""
+    today = date_type.today()
+    existing = (
+        db.query(CheckIn)
+        .filter(CheckIn.user_id == patient_id, CheckIn.date == today)
+        .first()
+    )
+    if existing:
+        row = existing
+    else:
+        row = CheckIn(user_id=patient_id, date=today)
+        db.add(row)
+
+    row.mood = payload.mood
+    row.energy_level = payload.energy
+    row.sleep_hours = payload.sleep
+    row.symptoms = payload.symptoms
+    row.pain_level = payload.painLevel
+
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": str(row.id),
+        "patientId": row.user_id,
+        "mood": row.mood,
+        "energy": row.energy_level,
+        "sleep": row.sleep_hours,
+        "symptoms": row.symptoms or [],
+        "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+        "date": row.date.isoformat() if row.date else None,
+    }

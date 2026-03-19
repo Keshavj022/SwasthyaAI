@@ -1,0 +1,12 @@
+import PageHeader from '@/components/ui/PageHeader'
+
+export default function Page() {
+  return (
+    <div>
+      <PageHeader title="Audit Logs" subtitle="System activity and compliance" />
+      <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center">
+        <p className="text-sm text-gray-400">Coming soon</p>
+      </div>
+    </div>
+  )
+}
