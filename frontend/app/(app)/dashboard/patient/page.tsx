@@ -15,11 +15,10 @@ import { useMyAppointments } from '@/hooks/useAppointments'
 import { useHealthHistory } from '@/hooks/usePatients'
 import type { HealthCheckIn } from '@/types'
 
-const CHAT_KEY = 'swasthya_chat_history'
-
-function getAIQueryCount(): number {
+function getAIQueryCount(userId: string): number {
   try {
-    const raw = typeof window !== 'undefined' ? localStorage.getItem(CHAT_KEY) : null
+    const key = `swasthya_chat_${userId}`
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(key) : null
     if (!raw) return 0
     const msgs: { role: string; timestamp: string }[] = JSON.parse(raw)
     const now = new Date()
@@ -92,9 +91,10 @@ function PatientDashboardInner() {
   )
 
   const streak = useMemo(() => getStreak(history ?? []), [history])
-  const aiQueries = getAIQueryCount()
+  const aiQueries = getAIQueryCount(user?.id ?? '')
 
   return (
+    <div className="flex-1 overflow-y-auto p-4 md:p-6">
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Welcome banner */}
       <WelcomeBanner checkInDoneToday={checkedInToday} />
@@ -147,6 +147,7 @@ function PatientDashboardInner() {
         <HealthTrendsChart patientId={patientId} />
         <MedicationReminders />
       </div>
+    </div>
     </div>
   )
 }
