@@ -13,10 +13,10 @@ export function WelcomeMessage({ userName }: WelcomeMessageProps) {
       </div>
 
       <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-        Hello, {userName}.
+        Hello, {userName}. I&apos;m your AI health assistant.
       </h2>
       <p className="text-gray-600 mb-4 max-w-md">
-        I&apos;m your AI health assistant. I can help you understand symptoms, check medications,
+        I can help you understand symptoms, check medications,
         book appointments, and answer health questions.
       </p>
 

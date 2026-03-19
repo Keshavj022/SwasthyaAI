@@ -11,7 +11,7 @@ export function TypingIndicator() {
       {/* Bubble */}
       <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
         <div className="flex items-center gap-1">
-          <span className="text-xs text-gray-500 mr-2">SwasthyaAI is thinking</span>
+          <span className="text-xs text-gray-500 mr-2">SwasthyaAI is thinking...</span>
           <span
             className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-bounce"
             style={{ animationDelay: '0ms' }}
