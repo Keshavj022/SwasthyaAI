@@ -4,6 +4,7 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Copy, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, Check } from 'lucide-react'
+import { toast } from 'sonner'
 import type { Message } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -106,9 +107,14 @@ export function MessageBubble({ message, userInitials }: MessageBubbleProps) {
   const agentConf = getAgentConfig(message.agentType)
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(message.content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // clipboard not available (non-HTTPS or permission denied)
+      toast.error('Could not copy to clipboard')
+    }
   }
 
   return (

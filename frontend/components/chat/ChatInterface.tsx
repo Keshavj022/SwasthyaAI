@@ -59,6 +59,7 @@ export function ChatInterface({ user, patientId }: ChatInterfaceProps) {
   function handleClearHistory() {
     if (!showClearConfirm) {
       setShowClearConfirm(true)
+      setTimeout(() => setShowClearConfirm(false), 4000)
       return
     }
     clearMessages()
