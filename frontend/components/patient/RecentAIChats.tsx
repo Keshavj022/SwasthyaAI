@@ -5,9 +5,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, ChevronRight, Bot } from 'lucide-react'
 import EmptyState from '@/components/ui/EmptyState'
+import { useAuth } from '@/hooks/useAuth'
 import type { Message } from '@/types'
-
-const CHAT_KEY = 'swasthya_chat_history'
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
@@ -21,11 +20,13 @@ function timeAgo(iso: string): string {
 
 export default function RecentAIChats() {
   const router = useRouter()
+  const { user } = useAuth()
   const [chats, setChats] = useState<Message[]>([])
 
   useEffect(() => {
+    if (!user) return
     try {
-      const raw = localStorage.getItem(CHAT_KEY)
+      const raw = localStorage.getItem(`swasthya_chat_${user.id}`)
       if (raw) {
         const msgs: Message[] = JSON.parse(raw)
         setChats(msgs.filter((m) => m.role === 'user').slice(-3).reverse())
@@ -33,7 +34,9 @@ export default function RecentAIChats() {
     } catch {
       // ignore parse errors
     }
-  }, [])
+  }, [user?.id])
+
+  if (!user) return null
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

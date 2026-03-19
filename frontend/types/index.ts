@@ -43,6 +43,8 @@ export interface Message {
   agentType?: string
   timestamp: string
   confidence?: number
+  disclaimer?: string
+  reasoning?: string
 }
 
 export interface AgentResponse {
