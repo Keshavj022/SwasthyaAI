@@ -5,6 +5,7 @@ import { Clock } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import EmptyState from '@/components/ui/EmptyState'
 import type { Appointment } from '@/types'
+import { isToday } from '@/lib/utils'
 
 const HOUR_START = 9
 const HOUR_END = 18
@@ -29,16 +30,6 @@ function minutesFromStart(iso: string): number {
 function getCurrentMinutes(): number {
   const now = new Date()
   return (now.getHours() - HOUR_START) * 60 + now.getMinutes()
-}
-
-function isToday(iso: string): boolean {
-  const d = new Date(iso)
-  const now = new Date()
-  return (
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear()
-  )
 }
 
 interface Props {
@@ -82,7 +73,7 @@ export default function TodaySchedule({ appointments, isLoading, onSelect }: Pro
               const h = HOUR_START + i
               return (
                 <span key={h} className="text-center" style={{ width: `${100 / (HOUR_END - HOUR_START)}%` }}>
-                  {h <= 12 ? `${h}AM` : `${h - 12}PM`}
+                  {h < 12 ? `${h}AM` : `${h - 12}PM`}
                 </span>
               )
             })}

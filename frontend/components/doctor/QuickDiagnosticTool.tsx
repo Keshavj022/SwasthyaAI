@@ -34,7 +34,7 @@ export default function QuickDiagnosticTool() {
       setResult(res)
       setHistory((prev) => [
         {
-          id: Math.random().toString(36).slice(2),
+          id: crypto.randomUUID(),
           query: input,
           response: res,
           timestamp: new Date().toISOString(),

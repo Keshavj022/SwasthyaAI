@@ -6,6 +6,7 @@ import { UserCircle, ChevronRight } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import EmptyState from '@/components/ui/EmptyState'
 import type { Appointment } from '@/types'
+import { isToday } from '@/lib/utils'
 
 function deriveStatus(iso: string): 'waiting' | 'in-progress' | 'completed' {
   const diff = Date.now() - new Date(iso).getTime()
@@ -24,16 +25,6 @@ const STATUS_LABEL: Record<string, string> = {
   'waiting':     'Waiting',
   'in-progress': 'In Progress',
   'completed':   'Completed',
-}
-
-function isToday(iso: string): boolean {
-  const d = new Date(iso)
-  const now = new Date()
-  return (
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear()
-  )
 }
 
 interface Props {
@@ -122,7 +113,7 @@ export default function PatientQueue({ appointments, isLoading }: Props) {
                   {STATUS_LABEL[status] ?? status}
                 </span>
                 <button
-                  onClick={() => router.push('/consultations')}
+                  onClick={() => router.push(`/consultations?appointmentId=${appt.id}`)}
                   className="shrink-0 flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-800 px-2 py-1 rounded-lg hover:bg-teal-50 transition-colors"
                 >
                   Start <ChevronRight className="w-3.5 h-3.5" />

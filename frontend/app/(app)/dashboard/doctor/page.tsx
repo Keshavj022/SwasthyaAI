@@ -14,6 +14,7 @@ import PatientSheet from '@/components/doctor/PatientSheet'
 import { useAuth } from '@/hooks/useAuth'
 import { useDoctorAppointments } from '@/hooks/useAppointments'
 import type { Appointment } from '@/types'
+import { isToday } from '@/lib/utils'
 
 function formatDate(): string {
   return new Date().toLocaleDateString('en-IN', {
@@ -22,16 +23,6 @@ function formatDate(): string {
     month: 'long',
     year: 'numeric',
   })
-}
-
-function isToday(iso: string): boolean {
-  const d = new Date(iso)
-  const now = new Date()
-  return (
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear()
-  )
 }
 
 function DoctorDashboardInner() {
@@ -76,6 +67,7 @@ function DoctorDashboardInner() {
           icon={<Calendar className="w-5 h-5" />}
           color="teal"
         />
+        {/* TODO: fetch real count */}
         <StatCard
           title="Pending Reports"
           value={2}
@@ -83,6 +75,7 @@ function DoctorDashboardInner() {
           icon={<FileText className="w-5 h-5" />}
           color="amber"
         />
+        {/* TODO: fetch real count */}
         <StatCard
           title="Critical Alerts"
           value={0}
@@ -90,6 +83,7 @@ function DoctorDashboardInner() {
           icon={<AlertTriangle className="w-5 h-5" />}
           color="red"
         />
+        {/* TODO: fetch real count */}
         <StatCard
           title="AI Queries"
           value={0}
