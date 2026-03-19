@@ -147,7 +147,7 @@ export function MessageBubble({ message, userInitials }: MessageBubbleProps) {
           </div>
 
           {/* Confidence bar */}
-          {message.confidence !== undefined && message.confidence > 0 && (
+          {message.confidence !== undefined && (
             <ConfidenceBar score={message.confidence} />
           )}
 
@@ -170,11 +170,9 @@ export function MessageBubble({ message, userInitials }: MessageBubbleProps) {
           )}
 
           {/* Disclaimer */}
-          {message.disclaimer && (
-            <p className="text-xs text-gray-400 italic mt-2 border-t border-gray-100 pt-2">
-              {message.disclaimer}
-            </p>
-          )}
+          <p className="text-xs text-gray-400 italic mt-2 border-t border-gray-100 pt-2">
+            {message.disclaimer ?? 'This information is for clinical decision support only. Always consult a qualified healthcare professional.'}
+          </p>
         </div>
 
         {/* Footer: timestamp + thumbs */}
