@@ -29,7 +29,7 @@ export default function RecentAIChats() {
       const raw = localStorage.getItem(`swasthya_chat_${user.id}`)
       if (raw) {
         const msgs: Message[] = JSON.parse(raw)
-        setChats(msgs.filter((m) => m.role === 'user').slice(-3).reverse())
+        setChats(msgs.filter((m) => m.role === 'assistant').slice(-3).reverse())
       }
     } catch {
       // ignore parse errors
@@ -41,7 +41,7 @@ export default function RecentAIChats() {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-semibold text-gray-900">Recent AI Chats</h2>
+        <h2 className="text-base font-semibold text-gray-900">Recent AI Responses</h2>
         <Link
           href="/chat"
           className="text-xs text-teal-600 font-medium hover:underline flex items-center gap-0.5"

@@ -1,14 +1,7 @@
-'use client'
-
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { orchestratorApi } from '@/lib/api'
 import type { Message, AgentResponse } from '@/types'
-
-let messageCounter = 0
-function nextId() {
-  return `msg-${++messageCounter}-${Date.now()}`
-}
 
 // ---------------------------------------------------------------------------
 // useChatHistory — message state with localStorage persistence
@@ -33,15 +26,28 @@ export function useChatHistory(userId?: string): UseChatHistoryReturn {
     }
   })
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !storageKey) return
+    try {
+      const stored = localStorage.getItem(storageKey)
+      if (stored) {
+        setMessages(JSON.parse(stored) as Message[])
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, [storageKey])
+
   const addMessage = useCallback(
     (msg: Omit<Message, 'id'>): Message => {
-      const full: Message = { ...msg, id: nextId() }
+      const full: Message = { ...msg, id: crypto.randomUUID() }
       setMessages((prev) => {
         const next = [...prev, full]
+        const stored = next.slice(-200)  // keep last 200 messages
         if (typeof window !== 'undefined' && storageKey) {
-          localStorage.setItem(storageKey, JSON.stringify(next))
+          localStorage.setItem(storageKey, JSON.stringify(stored))
         }
-        return next
+        return stored
       })
       return full
     },
@@ -93,7 +99,10 @@ export function useSendMessage(addMessage: UseChatHistoryReturn['addMessage']) {
       })
     },
 
-    onError: () => {
+    onError: (error) => {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[useSendMessage] orchestrator error:', error)
+      }
       addMessage({
         role: 'assistant',
         content: 'Sorry, I encountered an error processing your request. Please check your connection and try again.',
