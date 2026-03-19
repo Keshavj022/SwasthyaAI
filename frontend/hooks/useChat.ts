@@ -16,25 +16,15 @@ interface UseChatHistoryReturn {
 export function useChatHistory(userId?: string): UseChatHistoryReturn {
   const storageKey = userId ? `swasthya_chat_${userId}` : null
 
-  const [messages, setMessages] = useState<Message[]>(() => {
-    if (typeof window === 'undefined' || !storageKey) return []
-    try {
-      const stored = localStorage.getItem(storageKey)
-      return stored ? (JSON.parse(stored) as Message[]) : []
-    } catch {
-      return []
-    }
-  })
+  const [messages, setMessages] = useState<Message[]>(() => [])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !storageKey) return
     try {
       const stored = localStorage.getItem(storageKey)
-      if (stored) {
-        setMessages(JSON.parse(stored) as Message[])
-      }
+      setMessages(stored ? (JSON.parse(stored) as Message[]) : [])
     } catch {
-      // ignore parse errors
+      setMessages([])
     }
   }, [storageKey])
 
