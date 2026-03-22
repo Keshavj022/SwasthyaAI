@@ -263,132 +263,104 @@ class ImageAnalysisAgent(BaseAgent):
         clinical_context: Optional[Dict]
     ) -> Dict[str, Any]:
         """
-        Call MedSigLIP for finding detection.
+        Stage 1: MedSigLIP zero-shot classification to identify top findings.
+        Stage 2: MedGemma multimodal narrative impression for context.
 
-        STUB IMPLEMENTATION - Ready for production integration.
-
-        Production Integration:
-        1. Load image: PIL.Image.open(image_path)
-        2. Preprocess: MedSigLIP preprocessing pipeline
-        3. Encode image: model.encode_image(image)
-        4. Encode text prompts: model.encode_text(finding_prompts)
-        5. Compute similarities: cosine_similarity(image_features, text_features)
-        6. Threshold and rank findings
-        7. Generate natural language report
-
-        Example with HuggingFace:
-        ```python
-        from transformers import AutoProcessor, AutoModel
-        import torch
-
-        processor = AutoProcessor.from_pretrained("google/medsigLIP")
-        model = AutoModel.from_pretrained("google/medsigLIP")
-
-        image = Image.open(image_path)
-        inputs = processor(images=image, return_tensors="pt")
-
-        with torch.no_grad():
-            image_features = model.get_image_features(**inputs)
-
-        # Zero-shot classification with finding templates
-        finding_texts = ["opacity", "infiltrate", "normal lung"]
-        text_inputs = processor(text=finding_texts, return_tensors="pt", padding=True)
-        text_features = model.get_text_features(**text_inputs)
-
-        # Compute similarity
-        similarity = (image_features @ text_features.T).softmax(dim=-1)
-        ```
-
-        See MEDSIGCLIP_INTEGRATION_GUIDE.md for detailed instructions.
+        Falls back to a safe stub when models are unavailable.
         """
-        # TODO: Replace with actual MedSigLIP call in production
+        if not image_path:
+            return self._stub_findings(modality)
 
-        # STUB: Return mock findings based on modality
-        if modality == "chest_xray":
+        classifications = None
+        try:
+            from services import medsiglip_service
+            classifications = medsiglip_service.classify_image(image_path, modality, top_k=5)
+        except Exception:
+            pass
+
+        if classifications:
+            top = classifications[0]
+            top_label = top["label"]
+            top_score = top["score"]
+
+            severity = "normal" if "normal" in top_label.lower() else (
+                "high" if top_score >= 0.8 else "moderate" if top_score >= 0.6 else "mild"
+            )
+
+            finding = {
+                "finding": top_label,
+                "location": "Image region",
+                "severity": severity,
+                "confidence": top_score,
+                "description": (
+                    f"MedSigLIP zero-shot classification: '{top_label}' "
+                    f"(score {top_score:.2%})"
+                ),
+                "differential": [c["label"] for c in classifications[1:4]],
+            }
+
+            # MedGemma narrative impression (uses image if available)
+            impression = (
+                f"Primary finding: {top_label} (MedSigLIP confidence {top_score:.0%}). "
+                "Radiologist/specialist review required."
+            )
+            try:
+                from services import medgemma_service
+                context_str = f"\nClinical context: {clinical_context}" if clinical_context else ""
+                gemma_prompt = (
+                    f"You are a medical AI assistant reviewing a {modality} image.{context_str}\n"
+                    f"MedSigLIP analysis: primary finding '{top_label}' (confidence {top_score:.0%}). "
+                    f"Other possibilities: {', '.join(c['label'] for c in classifications[1:3])}.\n\n"
+                    "Provide a concise radiological impression (2-3 sentences) and 3 recommended "
+                    "next steps. Do NOT make a definitive diagnosis. Recommend specialist review."
+                )
+                gemma_text = medgemma_service.generate_with_image(
+                    prompt=gemma_prompt,
+                    image_path=image_path,
+                    max_new_tokens=256,
+                )
+                if gemma_text:
+                    impression = gemma_text
+            except Exception:
+                pass
+
             return {
                 "image_quality": "adequate",
-                "confidence": 0.75,
-                "findings": [
-                    {
-                        "finding": "Opacity in right lower lobe",
-                        "location": "Right lower lobe",
-                        "size": "Approximately 3x2 cm",
-                        "severity": "moderate",
-                        "confidence": 0.78,
-                        "description": "Ill-defined opacity consistent with possible infiltrate",
-                        "differential": ["Pneumonia", "Atelectasis", "Mass"]
-                    },
-                    {
-                        "finding": "Mild cardiomegaly",
-                        "location": "Cardiac silhouette",
-                        "severity": "mild",
-                        "confidence": 0.65,
-                        "description": "Cardiothoracic ratio appears mildly increased",
-                        "differential": ["Volume overload", "Cardiomyopathy", "Technical factors"]
-                    }
-                ],
-                "regions": [
-                    {
-                        "region": "Right lower lobe",
-                        "coordinates": {"x": 250, "y": 180, "width": 80, "height": 60},
-                        "description": "Area of increased opacity"
-                    }
-                ],
-                "impression": "Findings suggestive of right lower lobe opacity, possibly pneumonia. Mild cardiac enlargement noted. Radiologist review recommended for definitive interpretation.",
-                "next_steps": [
-                    "Correlate with clinical symptoms (fever, cough, dyspnea)",
-                    "Consider CT chest if diagnosis unclear",
-                    "Radiologist review required",
-                    "Follow-up imaging may be indicated based on treatment response"
-                ]
-            }
-        elif modality == "dermatology":
-            return {
-                "image_quality": "good",
-                "confidence": 0.72,
-                "findings": [
-                    {
-                        "finding": "Pigmented lesion with irregular borders",
-                        "location": "Lesion in image",
-                        "severity": "moderate",
-                        "confidence": 0.72,
-                        "description": "Asymmetric pigmented lesion with irregular border and color variation",
-                        "differential": ["Atypical nevus", "Melanoma", "Dysplastic nevus"]
-                    }
-                ],
-                "regions": [
-                    {
-                        "region": "Central lesion",
-                        "coordinates": {"x": 150, "y": 150, "width": 100, "height": 100},
-                        "description": "Pigmented lesion with ABCDE features"
-                    }
-                ],
-                "impression": "Pigmented lesion with concerning features (asymmetry, border irregularity, color variation). Dermatology evaluation recommended for clinical correlation and possible biopsy.",
-                "next_steps": [
-                    "Dermatology consultation recommended",
-                    "Consider dermoscopy for detailed examination",
-                    "Biopsy may be indicated based on clinical assessment",
-                    "Document lesion size and characteristics for monitoring"
-                ]
-            }
-        else:
-            return {
-                "image_quality": "adequate",
-                "confidence": 0.65,
-                "findings": [
-                    {
-                        "finding": "Image analysis pending",
-                        "location": "General",
-                        "severity": "unknown",
-                        "confidence": 0.65,
-                        "description": "Modality-specific analysis requires specialist review",
-                        "differential": []
-                    }
-                ],
+                "confidence": top_score,
+                "findings": [finding],
                 "regions": [],
-                "impression": "Specialist review required for definitive interpretation.",
-                "next_steps": ["Radiologist/specialist review required"]
+                "impression": impression,
+                "next_steps": [
+                    "Radiologist/specialist review required",
+                    "Correlate with clinical symptoms",
+                    "Consider follow-up imaging if indicated",
+                ],
             }
+
+        return self._stub_findings(modality)
+
+    def _stub_findings(self, modality: str) -> Dict[str, Any]:
+        """Return safe stub findings when AI models are unavailable."""
+        return {
+            "image_quality": "adequate",
+            "confidence": 0.50,
+            "findings": [
+                {
+                    "finding": "AI model unavailable — specialist review required",
+                    "location": "General",
+                    "severity": "unknown",
+                    "confidence": 0.50,
+                    "description": "Models not loaded. Manual radiologist review required.",
+                    "differential": [],
+                }
+            ],
+            "regions": [],
+            "impression": (
+                "AI image analysis unavailable. "
+                "Radiologist/specialist review required."
+            ),
+            "next_steps": ["Radiologist/specialist review required"],
+        }
 
     async def _call_medsigLIP_classification(
         self,
@@ -396,57 +368,47 @@ class ImageAnalysisAgent(BaseAgent):
         modality: str
     ) -> Dict[str, Any]:
         """
-        Call MedSigLIP for abnormality classification.
-        STUB - Ready for production integration.
+        Classify abnormality using MedSigLIP zero-shot scores.
+        Falls back to a safe stub when model unavailable.
         """
-        # STUB: Mock classification
-        if modality == "dermatology":
-            return {
-                "classification": "Concerning - Dermatology evaluation recommended",
-                "confidence": 0.70,
-                "reasoning": "Lesion exhibits ABCDE criteria: Asymmetry, Border irregularity, Color variation",
-                "characteristics": [
-                    "Asymmetric shape",
-                    "Irregular borders",
-                    "Multiple colors present",
-                    "Diameter >6mm"
-                ],
-                "differential": [
-                    "Atypical nevus",
-                    "Melanoma (requires biopsy to rule out)",
-                    "Dysplastic nevus"
-                ],
-                "red_flags": ["Features concerning for melanoma - urgent dermatology referral"],
-                "requires_specialist": True
-            }
-        elif modality == "chest_xray":
-            return {
-                "classification": "Abnormal - Infiltrate present",
-                "confidence": 0.75,
-                "reasoning": "Opacity in right lower lobe consistent with infiltrate",
-                "characteristics": [
-                    "Right lower lobe opacity",
-                    "Ill-defined margins",
-                    "Air bronchograms possibly present"
-                ],
-                "differential": [
-                    "Community-acquired pneumonia",
-                    "Aspiration pneumonia",
-                    "Atelectasis"
-                ],
-                "red_flags": [],
-                "requires_specialist": False
-            }
-        else:
-            return {
-                "classification": "Specialist review required",
-                "confidence": 0.60,
-                "reasoning": "Modality requires radiologist interpretation",
-                "characteristics": [],
-                "differential": [],
-                "red_flags": [],
-                "requires_specialist": True
-            }
+        if image_path:
+            try:
+                from services import medsiglip_service
+                classifications = medsiglip_service.classify_image(image_path, modality, top_k=5)
+                if classifications:
+                    top = classifications[0]
+                    top_label = top["label"]
+                    top_score = top["score"]
+                    is_normal = "normal" in top_label.lower()
+                    requires_specialist = not is_normal and top_score > 0.4
+                    red_flags = []
+                    if not is_normal and top_score > 0.6:
+                        red_flags.append(
+                            f"Possible {top_label} — specialist evaluation recommended"
+                        )
+                    return {
+                        "classification": top_label,
+                        "confidence": top_score,
+                        "reasoning": (
+                            f"MedSigLIP zero-shot similarity score: {top_score:.2%}"
+                        ),
+                        "characteristics": [c["label"] for c in classifications[1:4]],
+                        "differential": [c["label"] for c in classifications[1:4]],
+                        "red_flags": red_flags,
+                        "requires_specialist": requires_specialist,
+                    }
+            except Exception:
+                pass
+
+        return {
+            "classification": "AI model unavailable — specialist review required",
+            "confidence": 0.50,
+            "reasoning": "MedSigLIP not loaded",
+            "characteristics": [],
+            "differential": [],
+            "red_flags": [],
+            "requires_specialist": True,
+        }
 
     async def _call_medsigLIP_description(
         self,
@@ -454,15 +416,38 @@ class ImageAnalysisAgent(BaseAgent):
         modality: str
     ) -> Dict[str, Any]:
         """
-        Call MedSigLIP for natural language description generation.
-        STUB - Ready for production integration.
+        Generate natural language description using MedGemma with the image.
+        Falls back to a generic description when model is unavailable.
         """
-        # STUB: Mock description
+        if image_path:
+            try:
+                from services import medgemma_service
+                prompt = (
+                    f"Describe this {modality} medical image in 2-3 sentences. "
+                    "List the main anatomical structures visible and any notable features. "
+                    "Do NOT make a diagnosis. Recommend specialist review."
+                )
+                description = medgemma_service.generate_with_image(
+                    prompt=prompt, image_path=image_path, max_new_tokens=200
+                )
+                if description:
+                    return {
+                        "description": description,
+                        "confidence": 0.75,
+                        "structures": [],
+                        "features": [],
+                    }
+            except Exception:
+                pass
+
         return {
-            "description": f"Medical image showing anatomical structures typical of {modality}. Detailed description requires specialist review.",
-            "confidence": 0.65,
-            "structures": ["Anatomical structures visible"],
-            "features": ["Standard imaging features"]
+            "description": (
+                f"Medical image ({modality}). "
+                "AI description unavailable — detailed review requires specialist interpretation."
+            ),
+            "confidence": 0.50,
+            "structures": [],
+            "features": [],
         }
 
     def _identify_imaging_red_flags(self, findings: List[Dict], modality: str) -> List[str]:

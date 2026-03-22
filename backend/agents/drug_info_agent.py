@@ -131,15 +131,32 @@ class DrugInfoAgent(BaseAgent):
         - medication: Drug name (generic or brand)
         Optional context:
         - patient_context: Patient conditions/allergies for personalized info
+
+        For drugs not in the local database, MedGemma is used as a fallback.
         """
         medication = request.context.get("medication")
         if not medication:
             return self._error_response("'medication' required for drug information")
 
         medication_lower = medication.lower()
-
-        # Check if in our database (stub)
         drug_info = self._get_drug_info(medication_lower)
+
+        # If drug not in local DB, try MedGemma for richer info
+        ai_description: Optional[str] = None
+        if not drug_info.get("drug_class") or drug_info["drug_class"] == "Information not available in database":
+            try:
+                from services import medgemma_service
+                prompt = (
+                    f"Provide a concise medical overview of the drug '{medication}' covering: "
+                    "drug class, mechanism of action, common uses, typical adult dosage, "
+                    "common side effects, and major contraindications. "
+                    "Do NOT recommend dosing for specific patients. Keep it factual and brief."
+                )
+                ai_description = medgemma_service.generate_text(
+                    prompt, max_new_tokens=400, temperature=0.2
+                )
+            except Exception:
+                pass
 
         return AgentResponse(
             success=True,
@@ -159,12 +176,13 @@ class DrugInfoAgent(BaseAgent):
                 "contraindications": drug_info.get("contraindications", []),
                 "pregnancy_category": drug_info.get("pregnancy_category", ""),
                 "storage": drug_info.get("storage", ""),
-                "disclaimer": self._get_medication_disclaimer()
+                "ai_extended_info": ai_description,
+                "disclaimer": self._get_medication_disclaimer(),
             },
             confidence=0.85,
             reasoning=f"Medication information provided for {medication}",
             red_flags=[],
-            requires_escalation=False
+            requires_escalation=False,
         )
 
     async def _check_drug_interactions(self, request: AgentRequest) -> AgentResponse:

@@ -115,6 +115,12 @@ class IntentClassifier:
                 r"\b(transcribe|voice|speech|audio|recording)\b",
                 r"\b(dictate|hands-free)\b",
             ],
+            "lab_results": [
+                r"\b(lab|labs|blood test|blood work|bloodwork)\b",
+                r"\b(CBC|HbA1c|hba1c|hemoglobin|cholesterol|creatinine|glucose)\b",
+                r"\b(interpret|analyze|explain|read)\b.*\b(result|report|lab|test)\b",
+                r"\b(test result|lab result|blood result)\b",
+            ],
         }
 
     def classify(self, request: AgentRequest) -> IntentClassification:

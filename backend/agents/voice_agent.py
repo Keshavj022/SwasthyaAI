@@ -151,106 +151,95 @@ class VoiceAgent(BaseAgent):
         speaker_context: Dict
     ) -> Dict[str, Any]:
         """
-        Transcribe audio using MedASR.
+        Transcribe audio using MedASR (google/medasr).
 
-        STUB IMPLEMENTATION - Ready for production integration.
+        Stage 1: MedASR speech-to-text with medical vocabulary optimisation.
+        Stage 2: MedGemma extracts medical terms from the transcript.
 
-        Production Integration:
-        1. Load audio file or decode base64 audio_data
-        2. Preprocess audio (resample to 16kHz, mono)
-        3. Pass through MedASR model
-        4. Apply medical vocabulary boosting
-        5. Return transcription with confidence scores
-
-        Example with HuggingFace:
-        ```python
-        from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-        import torch
-        import torchaudio
-
-        processor = AutoProcessor.from_pretrained("google/medASR")
-        model = AutoModelForSpeechSeq2Seq.from_pretrained("google/medASR")
-
-        # Load audio
-        waveform, sample_rate = torchaudio.load(audio_path)
-
-        # Resample if needed
-        if sample_rate != 16000:
-            resampler = torchaudio.transforms.Resample(sample_rate, 16000)
-            waveform = resampler(waveform)
-
-        # Transcribe
-        inputs = processor(waveform.squeeze(), return_tensors="pt", sampling_rate=16000)
-        with torch.no_grad():
-            output_ids = model.generate(**inputs)
-
-        transcription = processor.batch_decode(output_ids, skip_special_tokens=True)[0]
-        ```
-
-        See MEDASR_INTEGRATION_GUIDE.md for detailed instructions.
+        Falls back to mode-specific stubs when models are unavailable.
         """
-        # TODO: Replace with actual MedASR call in production
+        # Stage 1 — MedASR transcription
+        result = None
+        try:
+            from services import medasr_service
+            result = medasr_service.transcribe(
+                audio_path=audio_path,
+                audio_data_b64=audio_data,
+            )
+        except Exception:
+            pass
 
-        # STUB: Return mock transcriptions based on mode
-        if mode == "symptom_reporting":
-            return {
-                "text": "I've been having a persistent cough and fever for the past 5 days. My temperature has been around 101 degrees Fahrenheit. I also feel very tired and have some shortness of breath when I walk up stairs.",
-                "confidence": 0.88,
-                "duration": 12.5,
-                "words": [
-                    {"word": "persistent", "confidence": 0.92, "start_time": 0.5, "end_time": 1.1},
-                    {"word": "cough", "confidence": 0.95, "start_time": 1.2, "end_time": 1.5},
-                    {"word": "fever", "confidence": 0.94, "start_time": 1.8, "end_time": 2.1}
-                ],
-                "medical_terms": [
-                    "cough", "fever", "temperature", "shortness of breath"
-                ],
-                "alternatives": [
-                    "I have been having a persistent cough and fever for the past 5 days",
-                    "I've had a persistent cough and fever for about 5 days"
-                ]
-            }
+        if result and result.get("text"):
+            text = result["text"]
+            confidence = result.get("confidence", 0.85)
 
-        elif mode == "medical_dictation":
+            # Stage 2 — MedGemma extracts medical terms
+            medical_terms: List[str] = []
+            try:
+                from services import medgemma_service
+                term_prompt = (
+                    "Extract all medical terms, symptoms, medications, and clinical findings "
+                    f"from this text. Return only a comma-separated list:\n\n{text}"
+                )
+                terms_text = medgemma_service.generate_text(
+                    term_prompt, max_new_tokens=100, temperature=0.0
+                )
+                if terms_text:
+                    medical_terms = [t.strip() for t in terms_text.split(",") if t.strip()]
+            except Exception:
+                pass
+
             return {
-                "text": "Patient is a 58-year-old male presenting with acute onset chest pain radiating to the left arm. Pain is described as crushing and substernal. Associated symptoms include diaphoresis and nausea. Vital signs: blood pressure 145 over 92, heart rate 98, oxygen saturation 96% on room air. Physical exam reveals mild distress, lungs clear bilaterally, heart regular rate and rhythm. EKG shows ST elevations in leads V2 through V4 consistent with anterior STEMI. Cardiology consulted, patient transferred to cath lab for emergent PCI.",
-                "confidence": 0.92,
-                "duration": 28.3,
+                "text": text,
+                "confidence": confidence,
+                "duration": 0,
                 "words": [],
-                "medical_terms": [
-                    "chest pain", "radiating", "substernal", "diaphoresis",
-                    "blood pressure", "oxygen saturation", "EKG", "ST elevations",
-                    "STEMI", "PCI", "cath lab"
-                ],
-                "alternatives": []
+                "medical_terms": medical_terms,
+                "alternatives": [],
             }
 
-        elif mode == "voice_query":
-            return {
-                "text": "What are the side effects of lisinopril?",
-                "confidence": 0.90,
-                "duration": 2.8,
-                "words": [
-                    {"word": "side", "confidence": 0.92},
-                    {"word": "effects", "confidence": 0.91},
-                    {"word": "lisinopril", "confidence": 0.88}
-                ],
-                "medical_terms": ["lisinopril", "side effects"],
-                "alternatives": [
-                    "What are the side effects of Lisinopril",
-                    "What are the side affects of lisinopril"
-                ]
-            }
+        # Stub fallback — keeps downstream routing working
+        return self._stub_transcription(mode)
 
-        else:  # general
-            return {
-                "text": "Hello, I would like to schedule an appointment with Dr. Smith for next week.",
-                "confidence": 0.85,
-                "duration": 4.2,
+    def _stub_transcription(self, mode: str) -> Dict[str, Any]:
+        """Return mode-appropriate stub when MedASR is unavailable."""
+        stubs = {
+            "symptom_reporting": {
+                "text": (
+                    "AI transcription unavailable. "
+                    "Please type your symptoms in the chat."
+                ),
+                "confidence": 0.0,
+                "duration": 0,
                 "words": [],
                 "medical_terms": [],
-                "alternatives": []
-            }
+                "alternatives": [],
+            },
+            "medical_dictation": {
+                "text": "AI transcription unavailable. Please type your dictation.",
+                "confidence": 0.0,
+                "duration": 0,
+                "words": [],
+                "medical_terms": [],
+                "alternatives": [],
+            },
+            "voice_query": {
+                "text": "AI transcription unavailable. Please type your question.",
+                "confidence": 0.0,
+                "duration": 0,
+                "words": [],
+                "medical_terms": [],
+                "alternatives": [],
+            },
+        }
+        return stubs.get(mode, {
+            "text": "AI transcription unavailable.",
+            "confidence": 0.0,
+            "duration": 0,
+            "words": [],
+            "medical_terms": [],
+            "alternatives": [],
+        })
 
     def _determine_routing(self, mode: str, transcription: str) -> List[str]:
         """Determine which agents should process the transcribed text."""

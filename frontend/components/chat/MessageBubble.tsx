@@ -88,6 +88,14 @@ export function MessageBubble({ message, userInitials }: MessageBubbleProps) {
       <div className="flex items-end justify-end gap-2 px-4 py-1">
         <div className="max-w-[70%]">
           <div className="bg-teal-600 text-white px-4 py-2.5 rounded-2xl rounded-br-sm shadow-sm">
+            {message.attachmentUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={message.attachmentUrl}
+                alt="Attached image"
+                className="max-w-[200px] rounded-lg mb-2 border border-teal-200"
+              />
+            )}
             <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
           </div>
           <p className="text-xs text-gray-400 mt-1 text-right">{formatTime(message.timestamp)}</p>

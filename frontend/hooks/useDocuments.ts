@@ -3,6 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { documentApi } from '@/lib/api'
+import type { UploadDocumentPayload } from '@/lib/api'
 import type { MedicalDocument } from '@/types'
 
 export const documentKeys = {
@@ -21,15 +22,18 @@ export function useUploadDocument() {
   const qc = useQueryClient()
   const [uploadProgress, setUploadProgress] = useState(0)
 
-  const mutation = useMutation<MedicalDocument, Error, { patientId: string; file: File }>({
-    mutationFn: async ({ patientId, file }) => {
+  const mutation = useMutation<MedicalDocument, Error, UploadDocumentPayload>({
+    mutationFn: async (payload) => {
       setUploadProgress(0)
-      // Simulate progress since axios FormData upload progress requires onUploadProgress config
+      // NOTE: This is simulated progress, not real upload progress.
+      // For large files (e.g. DICOM, high-res scans), the interval will
+      // reach 90% quickly and then jump to 100% on completion.
+      // TODO: Wire up real Axios onUploadProgress in documentApi.upload for accurate tracking.
       const interval = setInterval(() => {
         setUploadProgress((p) => Math.min(p + 20, 90))
       }, 200)
       try {
-        const result = await documentApi.upload(patientId, file)
+        const result = await documentApi.upload(payload)
         setUploadProgress(100)
         return result
       } finally {

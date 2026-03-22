@@ -11,10 +11,12 @@ from database import init_db, SessionLocal
 from routers import health
 from routers import orchestrator as orchestrator_router
 from routers import audit as audit_router
+from routers import admin as admin_router
 from routers import patients as patients_router
 from routers import documents as documents_router
 from routers import appointments as appointments_router
 from routers import auth as auth_router
+from routers import lab_results as lab_results_router
 from agents import register_all_agents
 from services.auth_service import get_current_user, require_admin
 
@@ -52,6 +54,14 @@ async def lifespan(app: FastAPI):
     init_db()
     _seed_admin()
     register_all_agents()
+
+    # Kick off background AI model preloading (non-blocking)
+    try:
+        from services.model_loader import preload_all_models
+        preload_all_models()
+        print(f"🧠 AI model preloading started in background")
+    except Exception as exc:
+        print(f"⚠️  AI model preloading skipped: {exc}")
 
     print(f"🤖 Agent orchestrator ready\n")
     yield
@@ -98,10 +108,20 @@ app.include_router(
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
+app.include_router(
+    lab_results_router.router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
 
 # Admin-only routes
 app.include_router(
     audit_router.router,
+    prefix="/api",
+    dependencies=[Depends(require_admin)],
+)
+app.include_router(
+    admin_router.router,
     prefix="/api",
     dependencies=[Depends(require_admin)],
 )

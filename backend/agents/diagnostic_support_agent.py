@@ -161,94 +161,46 @@ class DiagnosticSupportAgent(BaseAgent):
 
     async def _call_medgemma(self, prompt: str) -> str:
         """
-        Call MedGemma model for differential diagnosis generation.
+        Call MedGemma for differential diagnosis generation.
 
-        STUB IMPLEMENTATION - Ready for production integration.
-
-        Production Options:
-        1. Ollama: ollama.generate(model="medgemma:7b", prompt=prompt)
-        2. HuggingFace: AutoModelForCausalLM.from_pretrained("google/medgemma-7b")
-        3. vLLM: openai.ChatCompletion.create() pointing to vLLM server
-        4. Remote API: requests.post(MEDGEMMA_ENDPOINT, json={"prompt": prompt})
-
-        See MEDGEMMA_INTEGRATION_GUIDE.md for detailed integration steps.
+        Uses google/medgemma-1.5-4b-it via medgemma_service.
+        Falls back to a structured stub when the model is unavailable.
         """
-        # TODO: Replace with actual MedGemma call in production
-        # For now, return structured stub response
+        try:
+            from services import medgemma_service
+            result = medgemma_service.generate_text(
+                prompt=prompt,
+                max_new_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+            if result:
+                return result
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(f"DiagnosticAgent MedGemma call failed: {exc}")
 
-        # Simulate comprehensive differential diagnosis response
-        stub_response = """DIFFERENTIAL DIAGNOSIS:
+        # Structured fallback stub (preserves downstream parsing)
+        return """DIFFERENTIAL DIAGNOSIS:
 
-1. Viral Upper Respiratory Infection (Common Cold)
-   - Likelihood: Most Likely
-   - Confidence: 0.75
-   - Supports: Typical presentation of viral URI, common in community settings, symptom constellation fits
-   - Against: None specifically contradicting
-   - Missing Info: Complete duration, presence of sick contacts, response to symptomatic treatment
-
-2. Acute Bronchitis
-   - Likelihood: Possible
-   - Confidence: 0.60
-   - Supports: Persistent cough, possible chest symptoms
-   - Against: Would typically see more productive cough, chest discomfort
-   - Missing Info: Cough characteristics (dry vs productive), chest pain, smoking history
-
-3. Influenza
-   - Likelihood: Possible
-   - Confidence: 0.55
-   - Supports: Seasonal timing, systemic symptoms if present
-   - Against: Usually more severe systemic symptoms (myalgias, high fever)
-   - Missing Info: Fever degree, body aches, vaccination status, exposure history
-
-4. COVID-19
-   - Likelihood: Possible
-   - Confidence: 0.50
-   - Supports: Respiratory symptoms, ongoing community transmission
-   - Against: Symptom profile may vary
-   - Missing Info: Loss of taste/smell, known exposures, testing status
-
-5. Bacterial Sinusitis
-   - Likelihood: Less Likely
-   - Confidence: 0.40
-   - Supports: If nasal congestion and facial pain/pressure present
-   - Against: Typically develops after initial viral URI, needs specific symptoms
-   - Missing Info: Facial pain, purulent nasal discharge, symptom duration >7-10 days
-
-6. Pneumonia (Community-Acquired)
-   - Likelihood: Rare but Serious
-   - Confidence: 0.30
-   - Supports: Respiratory symptoms
-   - Against: Would expect fever, dyspnea, productive cough, systemic symptoms
-   - Missing Info: Vital signs (fever, tachypnea, hypoxia), chest exam findings, CXR
+1. Unable to generate differential (AI model unavailable)
+   - Likelihood: Unknown
+   - Confidence: 0.0
+   - Supports: N/A
+   - Against: N/A
+   - Missing Info: AI model required for analysis
 
 RED FLAGS:
-None identified from current presentation. Would require immediate evaluation if patient develops:
-- High fever (>103°F/39.4°C) not responding to antipyretics
-- Difficulty breathing or shortness of breath at rest
-- Chest pain
-- Altered mental status or severe lethargy
-- Signs of dehydration (decreased urination, dizziness)
+- Consult a healthcare provider for proper evaluation
 
 RECOMMENDED WORKUP:
-- Complete history and physical examination
-- Vital signs including pulse oximetry
-- If fever or concerning symptoms: Consider rapid flu test, COVID-19 test
-- If pneumonia suspected: Chest X-ray, complete blood count
-- Throat culture if pharyngitis with tonsillar exudates (rule out Strep)
+- Complete history and physical examination by a licensed provider
 
 CLINICAL CORRELATION NEEDED:
-- Exact symptom onset and progression timeline
-- Fever pattern and degree
-- Sick contacts or exposures
-- Vaccination status (flu, COVID-19, pneumococcal)
-- Comorbidities (COPD, asthma, immunocompromise)
-- Current medications and allergies
-- Social history (smoking, occupation, travel)
+- Professional medical evaluation required
 
 **IMPORTANT DISCLAIMER:**
-This differential diagnosis is for clinical decision support only. It does not replace comprehensive patient evaluation, clinical judgment, or diagnostic testing. All diagnoses must be confirmed through appropriate clinical assessment and investigations by a licensed healthcare provider.
+AI model unavailable. This response is a placeholder. Consult a licensed healthcare provider for differential diagnosis.
 """
-        return stub_response
 
     def _parse_differential_response(self, response: str) -> Dict:
         """

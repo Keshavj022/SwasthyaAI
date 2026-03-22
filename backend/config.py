@@ -41,7 +41,23 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = "your-gemini-api-key-here"
     OFFLINE_MODE: bool = True
 
-    # AI Model Paths (offline-first: models stored locally)
+    # Hugging Face
+    HF_TOKEN: str = ""
+
+    # AI Model Modes: "local" | "disabled"
+    MEDGEMMA_MODE: str = "local"
+    MEDSIGLIP_MODE: str = "local"
+    MEDASR_MODE: str = "local"
+
+    # Hugging Face model IDs
+    MEDGEMMA_MODEL_ID: str = "google/medgemma-1.5-4b-it"
+    MEDSIGLIP_MODEL_ID: str = "google/medsiglip-448"
+    MEDASR_MODEL_ID: str = "google/medasr"
+
+    # Local HF cache directory (empty string = use HF default ~/.cache/huggingface)
+    MODEL_CACHE_DIR: str = ""
+
+    # AI Model Paths (legacy — kept for backward compat)
     MODELS_DIR: Path = Path(__file__).parent.parent / "models"
     MEDGEMMA_MODEL_PATH: Path = MODELS_DIR / "medgemma"
     MEDSIGCLIP_MODEL_PATH: Path = MODELS_DIR / "medsigLIP"
@@ -50,6 +66,7 @@ class Settings(BaseSettings):
     # AI Model Configuration
     USE_GPU: bool = False  # Auto-detected at runtime
     MODEL_DEVICE: str = "auto"  # 'auto', 'cpu', 'cuda', or 'mps'
+    TORCH_DEVICE: str = "auto"  # alias settable via .env
     MAX_GENERATION_LENGTH: int = 512
     TEMPERATURE: float = 0.7
 

@@ -35,7 +35,10 @@ export function useChatHistory(userId?: string): UseChatHistoryReturn {
         const next = [...prev, full]
         const stored = next.slice(-200)  // keep last 200 messages
         if (typeof window !== 'undefined' && storageKey) {
-          localStorage.setItem(storageKey, JSON.stringify(stored))
+          // Strip runtime-only fields before persisting (attachmentUrl can be large base64)
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const toStore = stored.map(({ attachmentUrl: _, ...msg }) => msg)
+          localStorage.setItem(storageKey, JSON.stringify(toStore))
         }
         return stored
       })
@@ -62,6 +65,7 @@ interface SendMessageVars {
   query: string
   patientId?: string
   context?: Record<string, unknown>
+  attachmentUrl?: string
 }
 
 export function useSendMessage(addMessage: UseChatHistoryReturn['addMessage']) {
@@ -69,11 +73,12 @@ export function useSendMessage(addMessage: UseChatHistoryReturn['addMessage']) {
     mutationFn: ({ query, patientId, context }) =>
       orchestratorApi.ask(query, patientId, context),
 
-    onMutate: ({ query }) => {
+    onMutate: ({ query, attachmentUrl }) => {
       addMessage({
         role: 'user',
         content: query,
         timestamp: new Date().toISOString(),
+        attachmentUrl,
       })
     },
 

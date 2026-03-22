@@ -45,6 +45,7 @@ export interface Message {
   confidence?: number
   disclaimer?: string
   reasoning?: string
+  attachmentUrl?: string  // runtime-only, not persisted to localStorage
 }
 
 export interface AgentResponse {
@@ -66,22 +67,34 @@ export interface HealthCheckIn {
 }
 
 export interface MedicalDocument {
-  id: string
+  id: string           // normalized from document_id (integer → string)
   patientId: string
   fileName: string
-  fileType: string
+  fileType: string     // mime type
   uploadedAt: string
-  url: string
+  url: string          // download URL (constructed by frontend)
+  title: string
+  fileSize: number
+  documentType: string
+  tags: string[]
+  description?: string
 }
 
 export interface AuditLog {
   id: string
-  action: string
-  agentType: string
-  userId: string
+  auditId: string
   timestamp: string
+  userId: string
+  agentType: string        // maps from agent_name
+  confidenceScore: number | null
+  explainabilityScore: number | null
+  escalationTriggered: string | null
+  reasoningSummary: string | null
   inputSummary: string
   outputSummary: string
+  reviewed: boolean
+  // legacy compat
+  action?: string
 }
 
 export interface LabResult {
@@ -93,4 +106,77 @@ export interface LabResult {
   normalRange: string
   status: 'normal' | 'low' | 'high' | 'critical'
   timestamp: string
+}
+
+export interface LabResultInput {
+  testName: string
+  value: number
+  unit: string
+  date?: string
+}
+
+export interface InterpretedResult {
+  testName: string
+  value: number
+  unit: string
+  status: 'normal' | 'low' | 'high' | 'critical'
+  referenceRange: string
+  explanation: string
+  actionNeeded: boolean
+}
+
+export interface LabResultsResponse {
+  results: InterpretedResult[]
+  summary: string
+  patternsDetected: string[]
+  criticalFlags: string[]
+  followUpTests: string[]
+  disclaimer: string
+}
+
+export interface LabResultRecord {
+  testName: string
+  value: number
+  unit: string
+  date?: string
+}
+
+export interface SavedLabReport {
+  id: string
+  patientId: string
+  reportDate: string
+  labName: string
+  testCount: number
+  hasCritical: boolean
+  createdAt: string
+  results: LabResultRecord[]
+}
+
+export interface AdminUser {
+  id: string
+  email: string
+  fullName: string
+  role: 'doctor' | 'patient' | 'admin'
+  isActive: boolean
+  createdAt: string | null
+}
+
+export interface AdminStats {
+  dbSizeKb: number
+  totalPatients: number
+  totalAuditLogs: number
+  totalDocuments: number
+  agentRequests: { agentName: string; count: number }[]
+}
+
+export interface AdminAppointment {
+  id: string
+  patientId: string
+  doctorId: string | null
+  doctorName: string | null
+  specialty: string | null
+  dateTime: string
+  status: string
+  type: string | null
+  notes: string | null
 }

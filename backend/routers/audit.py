@@ -30,8 +30,11 @@ async def query_audit_logs(
     user_id: Optional[str] = Query(None, description="Filter by hashed user ID"),
     min_confidence: Optional[int] = Query(None, ge=0, le=100, description="Minimum confidence score"),
     escalations_only: Optional[bool] = Query(False, description="Only show escalations"),
-    hours: Optional[int] = Query(24, ge=1, le=168, description="Logs from last N hours"),
+    hours: Optional[int] = Query(None, ge=1, le=8760, description="Logs from last N hours (ignored if from_date given)"),
+    from_date: Optional[str] = Query(None, description="ISO date string start filter (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, description="ISO date string end filter (YYYY-MM-DD)"),
     limit: Optional[int] = Query(50, ge=1, le=500, description="Maximum number of results"),
+    offset: Optional[int] = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db)
 ):
     """
@@ -69,39 +72,68 @@ async def query_audit_logs(
     if escalations_only:
         query = query.filter(AuditLog.escalation_triggered.isnot(None))
 
-    # Time filter
-    since = datetime.utcnow() - timedelta(hours=hours)
-    query = query.filter(AuditLog.timestamp >= since)
+    # Time filter — explicit date range takes priority over hours
+    if from_date:
+        try:
+            query = query.filter(AuditLog.timestamp >= datetime.fromisoformat(from_date))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid from_date format, expected ISO 8601 (YYYY-MM-DD)")
+    elif hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        query = query.filter(AuditLog.timestamp >= since)
+    else:
+        # Default: last 24 hours
+        since = datetime.utcnow() - timedelta(hours=24)
+        query = query.filter(AuditLog.timestamp >= since)
+
+    if to_date:
+        try:
+            query = query.filter(AuditLog.timestamp <= datetime.fromisoformat(to_date))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid to_date format, expected ISO 8601 (YYYY-MM-DD)")
 
     # Order by most recent first
     query = query.order_by(AuditLog.timestamp.desc())
 
-    # Limit results
-    logs = query.limit(limit).all()
+    total = query.count()
+    logs = query.offset(offset or 0).limit(limit).all()
 
-    # Format results
     results = []
     for log in logs:
+        input_raw = log.input_data or {}
+        input_summary = (
+            input_raw.get("query") or input_raw.get("text") or str(input_raw)
+        )[:200] if input_raw else ""
+        output_raw = log.output_data or {}
+        output_summary = (
+            output_raw.get("response") or output_raw.get("message") or str(output_raw)
+        )[:200] if output_raw else ""
+
         results.append({
             "audit_id": f"audit_{log.timestamp.strftime('%Y%m%d')}_{log.id:05d}",
+            "id": str(log.id),
             "timestamp": log.timestamp.isoformat(),
+            "user_id": log.user_id or "",
             "agent_name": log.agent_name,
             "confidence_score": log.confidence_score,
             "explainability_score": log.explainability_score,
             "escalation_triggered": log.escalation_triggered,
             "reasoning_summary": log.reasoning_summary,
-            "reviewed": bool(log.reviewed_by)
+            "input_summary": input_summary,
+            "output_summary": output_summary,
+            "reviewed": bool(log.reviewed_by),
         })
 
     return {
-        "total_results": len(results),
+        "total_results": total,
         "filters_applied": {
             "agent_name": agent_name,
             "min_confidence": min_confidence,
             "escalations_only": escalations_only,
-            "hours": hours
+            "from_date": from_date,
+            "to_date": to_date,
         },
-        "logs": results
+        "logs": results,
     }
 
 

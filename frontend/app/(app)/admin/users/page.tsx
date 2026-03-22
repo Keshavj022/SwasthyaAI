@@ -1,12 +1,24 @@
-import PageHeader from '@/components/ui/PageHeader'
+'use client'
 
-export default function Page() {
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import { UserTable } from '@/components/admin/UserTable'
+
+function UsersPageInner() {
   return (
-    <div>
-      <PageHeader title="Users" subtitle="Manage system users" />
-      <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center">
-        <p className="text-sm text-gray-400">Coming soon</p>
+    <div className="flex-1 overflow-y-auto p-4 md:p-6">
+      <div className="mb-6">
+        <h1 className="text-xl font-bold text-gray-900">User Management</h1>
+        <p className="text-sm text-gray-500 mt-1">Manage accounts, roles, and access across the system.</p>
       </div>
+      <UserTable />
     </div>
+  )
+}
+
+export default function AdminUsersPage() {
+  return (
+    <ProtectedRoute allowedRoles={['admin']}>
+      <UsersPageInner />
+    </ProtectedRoute>
   )
 }

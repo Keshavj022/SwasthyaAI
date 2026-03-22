@@ -4,10 +4,16 @@ import { useQuery } from '@tanstack/react-query'
 import { auditApi } from '@/lib/api'
 import type { AuditLog } from '@/types'
 
-interface AuditLogsParams {
+export interface AuditLogsParams {
   limit?: number
   offset?: number
   agentType?: string
+  userId?: string
+  minConfidence?: number
+  escalationsOnly?: boolean
+  fromDate?: string
+  toDate?: string
+  hours?: number
 }
 
 interface AuditLogsResult {
@@ -23,5 +29,6 @@ export function useAuditLogs(params?: AuditLogsParams) {
   return useQuery<AuditLogsResult, Error>({
     queryKey: auditKeys.logs(params),
     queryFn: () => auditApi.getLogs(params),
+    staleTime: 30_000,
   })
 }

@@ -65,3 +65,27 @@ async def health_check(db: Session = Depends(get_db)):
 async def ping():
     """Simple ping endpoint for quick connectivity tests."""
     return {"message": "pong", "timestamp": datetime.utcnow().isoformat()}
+
+
+@router.get("/ai-status")
+async def ai_status():
+    """
+    AI model status endpoint.
+
+    Returns loading and availability status for all three local AI models:
+    MedGemma (text/image), MedSigLIP (image classification), MedASR (speech).
+    Also reports the active compute device (cuda / mps / cpu).
+
+    This endpoint is public (no auth required) so admin dashboards and
+    health checks can poll it without credentials.
+    """
+    try:
+        from services.model_loader import get_model_status
+        status = get_model_status()
+    except Exception as exc:
+        status = {"error": str(exc)}
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "ai_models": status,
+    }

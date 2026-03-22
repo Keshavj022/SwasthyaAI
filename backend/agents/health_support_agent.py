@@ -305,28 +305,44 @@ class HealthSupportAgent(BaseAgent):
         )
 
     def _generate_check_in_response(self, check_in: Dict[str, Any]) -> str:
-        """Generate personalized response based on check-in data"""
+        """Generate personalized wellness response using MedGemma when available."""
         mood = check_in.get("mood")
         energy = check_in.get("energy_level")
         sleep = check_in.get("sleep_hours")
+        symptoms = check_in.get("symptoms", [])
 
+        # Try MedGemma for a richer personalised message
+        try:
+            from services import medgemma_service
+            prompt = (
+                "You are a supportive health assistant. Generate a brief, warm, personalised "
+                "wellness check-in response (2-3 sentences) based on the following data:\n"
+                f"- Mood: {mood}/10\n"
+                f"- Energy: {energy}/10\n"
+                f"- Sleep hours: {sleep}\n"
+                f"- Reported symptoms: {', '.join(symptoms) if symptoms else 'none'}\n\n"
+                "Be encouraging, mention any areas that need attention, and keep it concise."
+            )
+            ai_text = medgemma_service.generate_text(prompt, max_new_tokens=150, temperature=0.6)
+            if ai_text:
+                return ai_text
+        except Exception:
+            pass
+
+        # Rule-based fallback
         messages = ["Good morning! Thanks for checking in."]
-
         if mood and mood >= 7:
             messages.append("It's great to see you're feeling positive today!")
         elif mood and mood <= 4:
             messages.append("I notice you're not feeling your best. Remember, it's okay to have off days.")
-
         if energy and energy >= 7:
             messages.append("Your energy levels look good!")
         elif energy and energy <= 4:
             messages.append("Your energy seems low. Make sure to take breaks and stay hydrated.")
-
         if sleep and sleep >= 7:
             messages.append("Good sleep quality!")
         elif sleep and sleep < 6:
             messages.append("You might benefit from more rest tonight.")
-
         return " ".join(messages)
 
     def _get_encouragement(self, check_in: Dict[str, Any]) -> str:

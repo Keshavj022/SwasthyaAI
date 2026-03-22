@@ -15,7 +15,13 @@ import type {
   HealthCheckIn,
   MedicalDocument,
   AuditLog,
-  LabResult,
+  AdminUser,
+  AdminStats,
+  AdminAppointment,
+  LabResultsResponse,
+  LabResultInput,
+  LabResultRecord,
+  SavedLabReport,
 } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -402,20 +408,79 @@ export const appointmentApi = {
 // Document API
 // ---------------------------------------------------------------------------
 
+interface BackendDocument {
+  document_id: number
+  title: string
+  document_type: string
+  file_name: string
+  file_size: number
+  mime_type: string
+  document_date: string | null
+  uploaded_at: string
+  tags: string[] | null
+  visit_id: number | null
+  description?: string
+}
+
+function normalizeDocument(raw: BackendDocument, patientId: string): MedicalDocument {
+  const base = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+  return {
+    id: String(raw.document_id),
+    patientId,
+    fileName: raw.file_name,
+    fileType: raw.mime_type,
+    uploadedAt: raw.uploaded_at ?? new Date().toISOString(),
+    url: `${base}/api/documents/${raw.document_id}/download`,
+    title: raw.title,
+    fileSize: raw.file_size,
+    documentType: raw.document_type,
+    tags: raw.tags ?? [],
+    description: raw.description,
+  }
+}
+
+export interface UploadDocumentPayload {
+  patientId: string
+  file: File
+  documentType: string
+  title: string
+  description?: string
+  tags?: string[]
+}
+
 export const documentApi = {
-  upload: async (patientId: string, file: File): Promise<MedicalDocument> => {
+  upload: async (payload: UploadDocumentPayload): Promise<MedicalDocument> => {
     const form = new FormData()
-    form.append('file', file)
-    form.append('patient_id', patientId)
+    form.append('file', payload.file)
+    form.append('patient_id', payload.patientId)
+    form.append('document_type', payload.documentType)
+    form.append('title', payload.title)
+    if (payload.description) form.append('description', payload.description)
+    if (payload.tags?.length) form.append('tags', payload.tags.join(','))
     const { data } = await apiClient.post('/api/documents/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    return data
+    return normalizeDocument(
+      {
+        document_id: data.document_id,
+        title: data.title,
+        document_type: data.document_type,
+        file_name: data.file_name,
+        file_size: data.file_size,
+        mime_type: data.mime_type,
+        document_date: null,
+        uploaded_at: data.uploaded_at,
+        tags: data.tags ?? payload.tags ?? null,
+        visit_id: null,
+      },
+      payload.patientId
+    )
   },
 
   getByPatient: async (patientId: string): Promise<MedicalDocument[]> => {
-    const { data } = await apiClient.get(`/api/documents?patient_id=${patientId}`)
-    return data
+    const { data } = await apiClient.get(`/api/documents/patient/${patientId}`)
+    const docs: BackendDocument[] = data.documents ?? []
+    return docs.map((d) => normalizeDocument(d, patientId))
   },
 
   delete: async (documentId: string): Promise<{ success: boolean }> => {
@@ -430,6 +495,42 @@ export const documentApi = {
 }
 
 // ---------------------------------------------------------------------------
+// Audit API — raw types & normalizers
+// ---------------------------------------------------------------------------
+
+interface RawAuditLog {
+  id?: string | number
+  audit_id: string
+  timestamp: string
+  user_id?: string
+  agent_name?: string
+  confidence_score?: number | null
+  explainability_score?: number | null
+  escalation_triggered?: string | null
+  reasoning_summary?: string | null
+  input_summary?: string
+  output_summary?: string
+  reviewed?: boolean
+}
+
+function normalizeAuditLog(raw: RawAuditLog): AuditLog {
+  return {
+    id: String(raw.id ?? raw.audit_id),
+    auditId: raw.audit_id,
+    timestamp: raw.timestamp,
+    userId: raw.user_id ?? '',
+    agentType: raw.agent_name ?? '',
+    confidenceScore: raw.confidence_score ?? null,
+    explainabilityScore: raw.explainability_score ?? null,
+    escalationTriggered: raw.escalation_triggered ?? null,
+    reasoningSummary: raw.reasoning_summary ?? null,
+    inputSummary: raw.input_summary ?? '',
+    outputSummary: raw.output_summary ?? '',
+    reviewed: Boolean(raw.reviewed),
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Audit API
 // ---------------------------------------------------------------------------
 
@@ -438,16 +539,149 @@ export const auditApi = {
     limit?: number
     offset?: number
     agentType?: string
+    userId?: string
+    minConfidence?: number
+    escalationsOnly?: boolean
+    fromDate?: string
+    toDate?: string
+    hours?: number
   }): Promise<{ logs: AuditLog[]; total: number }> => {
     const qs = new URLSearchParams()
     if (params?.limit !== undefined) qs.append('limit', String(params.limit))
     if (params?.offset !== undefined) qs.append('offset', String(params.offset))
     if (params?.agentType) qs.append('agent_name', params.agentType)
+    if (params?.userId) qs.append('user_id', params.userId)
+    if (params?.minConfidence !== undefined) qs.append('min_confidence', String(params.minConfidence))
+    if (params?.escalationsOnly) qs.append('escalations_only', 'true')
+    if (params?.fromDate) qs.append('from_date', params.fromDate)
+    if (params?.toDate) qs.append('to_date', params.toDate)
+    if (params?.hours !== undefined) qs.append('hours', String(params.hours))
     const { data } = await apiClient.get(`/api/audit/logs?${qs}`)
-    // Normalise backend shape → { logs, total }
+    const rawLogs: RawAuditLog[] = data.logs ?? data
     return {
-      logs: data.logs ?? data,
-      total: data.total_results ?? data.total ?? (data.logs ?? data).length,
+      logs: rawLogs.map(normalizeAuditLog),
+      total: data.total_results ?? data.total ?? rawLogs.length,
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+interface RawAdminUser {
+  id: string | number
+  email: string
+  full_name: string
+  role: string
+  is_active: boolean
+  created_at: string | null
+}
+
+interface RawAdminAppointment {
+  id: string | number
+  patient_id: string | number
+  doctor_id: string | number | null
+  doctor_name: string | null
+  specialty: string | null
+  date_time: string
+  status: string
+  type: string | null
+  notes: string | null
+}
+
+function normalizeAdminUser(raw: RawAdminUser): AdminUser {
+  return {
+    id: String(raw.id),
+    email: raw.email,
+    fullName: raw.full_name,
+    role: raw.role as AdminUser['role'],
+    isActive: Boolean(raw.is_active),
+    createdAt: raw.created_at ?? null,
+  }
+}
+
+export const adminApi = {
+  listUsers: async (): Promise<AdminUser[]> => {
+    const { data } = await apiClient.get('/api/admin/users')
+    return (data as RawAdminUser[]).map(normalizeAdminUser)
+  },
+
+  createUser: async (payload: {
+    email: string
+    password: string
+    fullName: string
+    role: string
+  }): Promise<AdminUser> => {
+    const { data } = await apiClient.post('/api/admin/users', {
+      email: payload.email,
+      password: payload.password,
+      full_name: payload.fullName,
+      role: payload.role,
+    })
+    return normalizeAdminUser(data)
+  },
+
+  updateUser: async (userId: string, patch: { role?: string; isActive?: boolean }): Promise<AdminUser> => {
+    const body: Record<string, unknown> = {}
+    if (patch.role !== undefined) body.role = patch.role
+    if (patch.isActive !== undefined) body.is_active = patch.isActive
+    const { data } = await apiClient.patch(`/api/admin/users/${userId}`, body)
+    return normalizeAdminUser(data)
+  },
+
+  resetPassword: async (userId: string): Promise<{ tempPassword: string }> => {
+    const { data } = await apiClient.post(`/api/admin/users/${userId}/reset-password`)
+    return { tempPassword: data.temp_password }
+  },
+
+  deleteUser: async (userId: string): Promise<void> => {
+    await apiClient.delete(`/api/admin/users/${userId}`)
+  },
+
+  getStats: async (): Promise<AdminStats> => {
+    const { data } = await apiClient.get('/api/admin/stats')
+    return {
+      dbSizeKb: data.db_size_kb,
+      totalPatients: data.total_patients,
+      totalAuditLogs: data.total_audit_logs,
+      totalDocuments: data.total_documents,
+      agentRequests: (data.agent_requests ?? []).map((r: { agent_name: string; count: number }) => ({
+        agentName: r.agent_name,
+        count: r.count,
+      })),
+    }
+  },
+
+  listAppointments: async (params?: {
+    status?: string
+    specialty?: string
+    fromDate?: string
+    toDate?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ total: number; appointments: AdminAppointment[] }> => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.append('status', params.status)
+    if (params?.specialty) qs.append('specialty', params.specialty)
+    if (params?.fromDate) qs.append('from_date', params.fromDate)
+    if (params?.toDate) qs.append('to_date', params.toDate)
+    if (params?.limit !== undefined) qs.append('limit', String(params.limit))
+    if (params?.offset !== undefined) qs.append('offset', String(params.offset))
+    const { data } = await apiClient.get(`/api/admin/appointments?${qs}`)
+    return {
+      total: data.total ?? 0,
+      appointments: (data.appointments ?? []).map((a: RawAdminAppointment) => ({
+        id: String(a.id),
+        patientId: String(a.patient_id),
+        doctorId: a.doctor_id ? String(a.doctor_id) : null,
+        doctorName: a.doctor_name ?? null,
+        specialty: a.specialty ?? null,
+        dateTime: a.date_time,
+        status: a.status,
+        type: a.type ?? null,
+        notes: a.notes ?? null,
+      })),
     }
   },
 }
@@ -465,6 +699,128 @@ export const healthApi = {
   ping: async (): Promise<{ status: string }> => {
     const { data } = await apiClient.get('/api/health/ping')
     return data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Lab Results API
+// ---------------------------------------------------------------------------
+
+interface RawInterpretedResult {
+  test_name: string
+  value: number
+  unit: string
+  status: 'normal' | 'low' | 'high' | 'critical'
+  reference_range: string
+  explanation: string
+  action_needed: boolean
+}
+
+interface RawLabResultsResponse {
+  results: RawInterpretedResult[]
+  summary: string
+  patterns_detected: string[]
+  critical_flags: string[]
+  follow_up_tests: string[]
+  disclaimer: string
+}
+
+interface RawSavedLabReport {
+  id: string
+  patient_id: string
+  report_date: string
+  lab_name: string
+  test_count: number
+  has_critical: boolean
+  created_at: string
+  results: { test_name: string; value: number; unit: string; date?: string }[]
+}
+
+function normalizeLabResultsResponse(raw: RawLabResultsResponse): LabResultsResponse {
+  return {
+    results: raw.results.map((r) => ({
+      testName: r.test_name,
+      value: r.value,
+      unit: r.unit,
+      status: r.status,
+      referenceRange: r.reference_range,
+      explanation: r.explanation,
+      actionNeeded: r.action_needed,
+    })),
+    summary: raw.summary,
+    patternsDetected: raw.patterns_detected,
+    criticalFlags: raw.critical_flags,
+    followUpTests: raw.follow_up_tests,
+    disclaimer: raw.disclaimer,
+  }
+}
+
+function normalizeSavedLabReport(raw: RawSavedLabReport): SavedLabReport {
+  return {
+    id: raw.id,
+    patientId: raw.patient_id,
+    reportDate: raw.report_date,
+    labName: raw.lab_name,
+    testCount: raw.test_count,
+    hasCritical: raw.has_critical,
+    createdAt: raw.created_at,
+    results: (raw.results ?? []).map((r) => ({
+      testName: r.test_name,
+      value: r.value,
+      unit: r.unit,
+      date: r.date,
+    })),
+  }
+}
+
+export const labResultsApi = {
+  interpret: async (params: {
+    results: LabResultInput[]
+    patientId: string
+    patientAge: number
+    patientSex: 'male' | 'female' | 'other'
+  }): Promise<LabResultsResponse> => {
+    const { data } = await apiClient.post('/api/lab-results/interpret', {
+      results: params.results.map((r) => ({
+        test_name: r.testName,
+        value: r.value,
+        unit: r.unit,
+        date: r.date,
+      })),
+      patient_id: params.patientId,
+      patient_age: params.patientAge,
+      patient_sex: params.patientSex,
+    })
+    return normalizeLabResultsResponse(data as RawLabResultsResponse)
+  },
+
+  save: async (params: {
+    patientId: string
+    results: LabResultInput[]
+    reportDate: string
+    labName: string
+    patientAge: number
+    patientSex: 'male' | 'female' | 'other'
+  }): Promise<{ id: string; saved: boolean }> => {
+    const { data } = await apiClient.post('/api/lab-results/save', {
+      patient_id: params.patientId,
+      results: params.results.map((r) => ({
+        test_name: r.testName,
+        value: r.value,
+        unit: r.unit,
+        date: r.date,
+      })),
+      report_date: params.reportDate,
+      lab_name: params.labName,
+      patient_age: params.patientAge,
+      patient_sex: params.patientSex,
+    })
+    return data
+  },
+
+  getHistory: async (patientId: string): Promise<SavedLabReport[]> => {
+    const { data } = await apiClient.get(`/api/lab-results/${patientId}`)
+    return (data as RawSavedLabReport[]).map(normalizeSavedLabReport)
   },
 }
 
@@ -622,6 +978,11 @@ export async function listAgents(): Promise<ApiResult<{ total_agents: number; ag
   }
 }
 
+/**
+ * @deprecated Use `auditApi.getLogs` and `useAuditLogs` hook instead.
+ * This function returns unnormalized AuditLogEntry objects (snake_case, no auditId etc.)
+ * and will not be updated with new filter params.
+ */
 export async function fetchAuditLogs(options?: {
   agent_name?: string
   min_confidence?: number

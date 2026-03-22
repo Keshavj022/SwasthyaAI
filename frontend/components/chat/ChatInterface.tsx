@@ -36,6 +36,8 @@ export function ChatInterface({ user, patientId }: ChatInterfaceProps) {
   // Clear history confirm state
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
+  const [isReadingFile, setIsReadingFile] = useState(false)
+
   const isLoading = sendMutation.isPending
   const showSuggestions = messages.length === 0 && !isLoading
 
@@ -44,16 +46,84 @@ export function ChatInterface({ user, patientId }: ChatInterfaceProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isLoading])
 
-  function handleSend(text: string, _file?: File) {
-    // _file is wired but full image analysis is Task 09
-    sendMutation.mutate(
-      { query: text, patientId },
-      {
-        onError: () => {
-          toast.error('Failed to get a response. Check your connection.')
-        },
+  // Pick up pending image analysis from DocumentPreviewPanel's "Analyze with AI" button
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const raw = sessionStorage.getItem('pendingImageAnalysis')
+    if (!raw) return
+    try {
+      const { base64, mimeType, fileName, query } = JSON.parse(raw) as {
+        base64: string
+        mimeType: string
+        fileName: string
+        query: string
       }
-    )
+      sessionStorage.removeItem('pendingImageAnalysis')
+      const dataUrl = `data:${mimeType};base64,${base64}`
+      sendMutation.mutate(
+        {
+          query,
+          patientId,
+          context: {
+            image_data: base64,
+            modality: 'other',
+            analysis_type: 'finding_detection',
+          },
+          attachmentUrl: dataUrl,
+        },
+        {
+          onError: () => toast.error('Failed to analyze image. Please try again.'),
+        }
+      )
+    } catch {
+      sessionStorage.removeItem('pendingImageAnalysis')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run on mount
+
+  async function handleSend(text: string, file?: File) {
+    if (file && file.type.startsWith('image/')) {
+      setIsReadingFile(true)
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const r = reader.result as string
+            resolve(r.split(',')[1] ?? r)
+          }
+          reader.onerror = () => reject(new Error('Failed to read file'))
+          reader.readAsDataURL(file)
+        })
+        const dataUrl = `data:${file.type};base64,${base64}`
+        sendMutation.mutate(
+          {
+            query: text,
+            patientId,
+            context: {
+              image_data: base64,
+              modality: 'other',
+              analysis_type: 'finding_detection',
+            },
+            attachmentUrl: dataUrl,
+          },
+          {
+            onError: () => toast.error('Failed to get a response. Check your connection.'),
+          }
+        )
+      } catch {
+        toast.error('Failed to read image file. Please try again.')
+      } finally {
+        setIsReadingFile(false)
+      }
+      return
+    } else {
+      sendMutation.mutate(
+        { query: text, patientId },
+        {
+          onError: () => toast.error('Failed to get a response. Check your connection.'),
+        }
+      )
+    }
   }
 
   function handleClearHistory() {
@@ -119,7 +189,7 @@ export function ChatInterface({ user, patientId }: ChatInterfaceProps) {
       {/* Input */}
       <ChatInput
         onSend={handleSend}
-        disabled={isLoading}
+        disabled={isLoading || isReadingFile}
         initialValue={pendingPrompt}
         onInitialValueConsumed={handleInitialValueConsumed}
       />

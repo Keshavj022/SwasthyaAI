@@ -1,12 +1,24 @@
-import PageHeader from '@/components/ui/PageHeader'
+'use client'
 
-export default function Page() {
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import { SystemHealthDashboard } from '@/components/admin/SystemHealthDashboard'
+
+function SystemPageInner() {
   return (
-    <div>
-      <PageHeader title="System Health" subtitle="Infrastructure status" />
-      <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center">
-        <p className="text-sm text-gray-400">Coming soon</p>
+    <div className="flex-1 overflow-y-auto p-4 md:p-6">
+      <div className="mb-6">
+        <h1 className="text-xl font-bold text-gray-900">System Health</h1>
+        <p className="text-sm text-gray-500 mt-1">Real-time status — refreshes every 30 seconds.</p>
       </div>
+      <SystemHealthDashboard />
     </div>
+  )
+}
+
+export default function AdminSystemPage() {
+  return (
+    <ProtectedRoute allowedRoles={['admin']}>
+      <SystemPageInner />
+    </ProtectedRoute>
   )
 }
