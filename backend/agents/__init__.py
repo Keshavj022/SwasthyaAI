@@ -15,6 +15,7 @@ from agents.health_memory_agent import HealthMemoryAgent
 from agents.appointment_agent import AppointmentAgent
 from agents.nearby_doctors_agent import NearbyDoctorsAgent
 from agents.voice_agent import VoiceAgent
+from agents.lab_results_agent import LabResultsAgent
 import logging
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ def register_all_agents():
     registry.register(AppointmentAgent())
     registry.register(NearbyDoctorsAgent())
     registry.register(VoiceAgent())
+    registry.register(LabResultsAgent())
 
     logger.info(f"✓ Registered {len(registry)} agents successfully")
 
@@ -58,5 +60,6 @@ __all__ = [
     "AppointmentAgent",
     "NearbyDoctorsAgent",
     "VoiceAgent",
+    "LabResultsAgent",
     "register_all_agents"
 ]

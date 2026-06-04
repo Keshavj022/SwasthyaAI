@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { patientApi } from '@/lib/api'
 import type { Patient, HealthCheckIn } from '@/types'
@@ -15,6 +16,30 @@ export function usePatients() {
     queryKey: patientKeys.all,
     queryFn: patientApi.getAll,
   })
+}
+
+/**
+ * Builds a lookup map keyed by both patient `id` and `userId` so callers can
+ * resolve an appointment's `patientId` to the full patient record regardless of
+ * which identifier the appointment references.
+ */
+export function usePatientLookup() {
+  const query = usePatients()
+  const map = useMemo(() => {
+    const m = new Map<string, Patient>()
+    for (const p of query.data ?? []) {
+      if (p.id) m.set(p.id, p)
+      if (p.userId) m.set(p.userId, p)
+    }
+    return m
+  }, [query.data])
+
+  return {
+    ...query,
+    lookup: map,
+    resolve: (patientId: string | undefined): Patient | undefined =>
+      patientId ? map.get(patientId) : undefined,
+  }
 }
 
 export function usePatient(id: string) {

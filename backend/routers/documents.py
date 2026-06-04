@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
+import logging
 import sys
 from pathlib import Path
 
@@ -17,9 +18,40 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database import get_db
 from models.patient import Patient, DocumentAttachment
+from models.user import User
+from services.auth_service import get_current_user
 from services.file_storage import file_storage
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+def _ensure_can_access_patient(current_user: User, patient_id: str) -> None:
+    """A patient may only touch their OWN documents; doctors/admins any.
+
+    The frontend uses the User UUID as the patient identifier, so a patient is
+    authorized iff the requested patient_id equals their own id.
+    """
+    if current_user.role in ("doctor", "admin"):
+        return
+    if str(patient_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to access these documents")
+
+
+def _ensure_can_access_document(
+    current_user: User, document: DocumentAttachment, db: Session
+) -> None:
+    """Authorize access to a single document by resolving its owning patient.
+
+    Documents store the internal Patient.id; the patient's external patient_id is
+    the User UUID for self-registered patients, so we compare against that.
+    """
+    if current_user.role in ("doctor", "admin"):
+        return
+    patient = db.query(Patient).filter(Patient.id == document.patient_id).first()
+    if not patient or str(patient.patient_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to access this document")
 
 
 @router.post("/upload")
@@ -32,7 +64,8 @@ async def upload_document(
     tags: Optional[str] = Form(None),  # Comma-separated tags
     visit_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload medical document or image.
@@ -60,6 +93,9 @@ async def upload_document(
           -F "file=@chest_xray.jpg"
         ```
     """
+    # Object-level authorization: patients may only upload to their own record.
+    _ensure_can_access_patient(current_user, patient_id)
+
     # Verify patient exists
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
@@ -69,6 +105,7 @@ async def upload_document(
     if not patient:
         raise HTTPException(status_code=404, detail=f"Patient '{patient_id}' not found")
 
+    # document_type + title are required (enforced by Form(...) above).
     try:
         # Read file content
         file_content = await file.read()
@@ -117,15 +154,21 @@ async def upload_document(
         }
 
     except ValueError as e:
+        # File-validation errors (bad extension, too large) are safe to surface.
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:  # pragma: no cover - defensive
+        # Never leak internal exception text to the client.
+        logger.exception("Document upload failed")
+        raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
 
 
 @router.get("/{document_id}/download")
 async def download_document(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Download document file.
@@ -149,6 +192,8 @@ async def download_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    _ensure_can_access_document(current_user, document, db)
+
     # Get file content
     file_content = file_storage.get_file(document.file_path)
 
@@ -170,7 +215,8 @@ async def list_patient_documents(
     patient_id: str,
     document_type: Optional[str] = Query(None, description="Filter by document type"),
     limit: int = Query(50, ge=1, le=500),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     List all documents for a patient.
@@ -188,6 +234,9 @@ async def list_patient_documents(
         GET /api/documents/patient/P12345?document_type=xray&limit=10
         ```
     """
+    # Patients may only list their own documents.
+    _ensure_can_access_patient(current_user, patient_id)
+
     # Verify patient exists
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
@@ -237,7 +286,8 @@ async def search_documents(
     document_type: Optional[str] = Query(None, description="Filter by type"),
     tags: Optional[str] = Query(None, description="Comma-separated tags"),
     limit: int = Query(50, ge=1, le=500),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Search documents by title, description, or tags.
@@ -257,6 +307,14 @@ async def search_documents(
         GET /api/documents/search?patient_id=P12345&query=xray&tags=chest
         ```
     """
+    # SECURITY: patients may only search within their own documents. They cannot
+    # run an unscoped (cross-patient) search.
+    if current_user.role not in ("doctor", "admin"):
+        if not patient_id:
+            patient_id = str(current_user.id)
+        else:
+            _ensure_can_access_patient(current_user, patient_id)
+
     # Build query
     db_query = db.query(DocumentAttachment)
 
@@ -327,7 +385,8 @@ async def search_documents(
 @router.get("/{document_id}")
 async def get_document_info(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get document metadata (without downloading file).
@@ -349,6 +408,8 @@ async def get_document_info(
 
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    _ensure_can_access_document(current_user, document, db)
 
     # Get patient info
     patient = db.query(Patient).filter(Patient.id == document.patient_id).first()
@@ -373,7 +434,8 @@ async def get_document_info(
 @router.delete("/{document_id}")
 async def delete_document(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Delete document and associated file.
@@ -396,13 +458,14 @@ async def delete_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    _ensure_can_access_document(current_user, document, db)
+
     # Delete file from storage
     file_deleted = file_storage.delete_file(document.file_path)
 
     if not file_deleted:
         # Log warning but continue (file may already be deleted)
-        import logging
-        logging.warning(f"File not found in storage: {document.file_path}")
+        logger.warning("File not found in storage during delete: %s", document.file_path)
 
     # Delete database record
     db.delete(document)

@@ -59,6 +59,15 @@ class BaseInference(ABC):
                 return "cpu"
         return device
 
+    def service_available(self) -> bool:
+        """
+        Whether a REAL model is being served via the central service layer
+        (services.model_loader). Subclasses that delegate to a *_service module
+        override this. Default: False so the stub path is used and stub_mode is
+        reported truthfully.
+        """
+        return False
+
     def _load_model(self) -> bool:
         """
         Load model weights (lazy loading on first inference)

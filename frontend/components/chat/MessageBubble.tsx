@@ -3,9 +3,9 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Copy, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, Check } from 'lucide-react'
+import { Copy, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, Check, FileText, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Message } from '@/types'
+import type { ChatMessage } from '@/hooks/useChat'
 
 // ---------------------------------------------------------------------------
 // Agent badge config
@@ -68,7 +68,7 @@ function formatTime(iso: string): string {
 // ---------------------------------------------------------------------------
 
 interface MessageBubbleProps {
-  message: Message
+  message: ChatMessage
   userInitials: string
 }
 
@@ -84,12 +84,33 @@ export function MessageBubble({ message, userInitials }: MessageBubbleProps) {
   // ---------------------------------------------------------------------------
 
   if (isUser) {
+    const attachment = message.attachment
+    const isImageAttachment = attachment && attachment.mimeType.startsWith('image/')
     return (
       <div className="flex items-end justify-end gap-2 px-4 py-1">
-        <div className="max-w-[70%]">
-          <div className="bg-teal-600 text-white px-4 py-2.5 rounded-2xl rounded-br-sm shadow-sm">
-            <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-          </div>
+        <div className="max-w-[70%] flex flex-col items-end">
+          {/* Attachment preview (above the text) */}
+          {attachment && (
+            isImageAttachment ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={attachment.preview}
+                alt={attachment.fileName}
+                className="mb-1.5 rounded-xl border border-teal-200 shadow-sm"
+                style={{ maxWidth: 200, maxHeight: 200 }}
+              />
+            ) : (
+              <div className="mb-1.5 flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 shadow-sm">
+                <FileText size={15} className="text-teal-600" />
+                <span className="text-xs text-gray-700 truncate max-w-[160px]">{attachment.fileName}</span>
+              </div>
+            )
+          )}
+          {message.content && (
+            <div className="bg-teal-600 text-white px-4 py-2.5 rounded-2xl rounded-br-sm shadow-sm">
+              <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+            </div>
+          )}
           <p className="text-xs text-gray-400 mt-1 text-right">{formatTime(message.timestamp)}</p>
         </div>
         {/* Initials avatar */}
@@ -128,11 +149,21 @@ export function MessageBubble({ message, userInitials }: MessageBubbleProps) {
       <div className="max-w-[80%] bg-white border border-gray-200 rounded-2xl rounded-tl-sm shadow-sm overflow-hidden">
         {/* Card header: agent badge + copy */}
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
-          <span
-            className={`text-xs font-semibold px-2 py-0.5 rounded-full ${agentConf.colorClass}`}
-          >
-            {agentConf.label}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`text-xs font-semibold px-2 py-0.5 rounded-full ${agentConf.colorClass}`}
+            >
+              {agentConf.label}
+            </span>
+            {message.isStub && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800"
+                title="AI model not loaded — demo output"
+              >
+                <AlertTriangle size={10} /> Demo
+              </span>
+            )}
+          </div>
           <button
             onClick={handleCopy}
             className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded"

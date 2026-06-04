@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-const PUBLIC_PATHS = ['/login', '/register']
+const PUBLIC_PATHS = ['/', '/login', '/register', '/offline']
 const AUTH_PATHS = ['/login', '/register']
 
 const DASHBOARD_BY_ROLE: Record<string, string> = {
@@ -44,32 +44,26 @@ function isExpired(payload: { exp?: number }): boolean {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   const isAuthPath = AUTH_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))
-  const isPublicPath = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))
   const isDashboardPath = pathname.startsWith('/dashboard')
-  const isRoot = pathname === '/'
 
-  // Try to read token from Zustand persist storage via a cookie we can set from client
-  // For SSR middleware, we rely on a cookie named 'swasthya_token'
+  // Token comes from the 'swasthya_token' cookie (set by useAuth on login) or a
+  // Bearer header. The client mirrors its JWT into this cookie so SSR auth works.
   const token = getTokenFromCookieOrHeader(request)
   const payload = token ? decodePayload(token) : null
   const isAuthenticated = !!payload && !isExpired(payload)
 
-  // Redirect unauthenticated users away from protected routes
-  if ((isDashboardPath || isRoot) && !isAuthenticated) {
+  // Protect dashboard routes: bounce unauthenticated users to login.
+  if (isDashboardPath && !isAuthenticated) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Redirect authenticated users away from auth pages
+  // Send already-authenticated users away from login/register to their dashboard.
   if (isAuthPath && isAuthenticated && payload?.role) {
     const dest = DASHBOARD_BY_ROLE[payload.role] ?? '/dashboard/patient'
     return NextResponse.redirect(new URL(dest, request.url))
   }
 
-  // Redirect root to login (handled above if unauthenticated)
-  if (isRoot && isAuthenticated && payload?.role) {
-    return NextResponse.redirect(new URL(DASHBOARD_BY_ROLE[payload.role] ?? '/dashboard/patient', request.url))
-  }
-
+  // The landing page ('/') stays public for everyone (marketing page).
   return NextResponse.next()
 }
 

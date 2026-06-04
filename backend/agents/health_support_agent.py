@@ -275,8 +275,14 @@ class HealthSupportAgent(BaseAgent):
             "timestamp": check_in.timestamp.isoformat()
         }
 
-        # Generate personalized response
+        # Generate personalized response (rule-based, deterministic).
         response_message = self._generate_check_in_response(check_in_data)
+
+        # Optionally enrich with a MedGemma wellness message when the model is
+        # loaded. This is supportive text only; never a medical finding.
+        ai_message, ai_stub = self._medgemma_wellness(check_in_data)
+        if ai_message and not ai_stub:
+            response_message = ai_message
 
         # Check if we need to alert (concerning symptoms)
         alerts = []
@@ -298,11 +304,42 @@ class HealthSupportAgent(BaseAgent):
                 "alerts": alerts,
                 "reminders_today": today_reminders,
                 "encouragement": self._get_encouragement(check_in_data),
-                "message": response_message
+                "message": response_message,
+                # Rule-based admin support tool — not medical AI. stub_mode only
+                # reflects whether the optional MedGemma wellness text was used.
+                "stub_mode": ai_stub if ai_message is not None else False,
+                "ai_message_used": bool(ai_message and not ai_stub),
             },
             confidence=0.95,
             reasoning="Daily check-in completed successfully"
         )
+
+    def _medgemma_wellness(self, check_in_data: Dict[str, Any]):
+        """
+        Optional MedGemma wellness message. Returns (text, stub_mode); text is
+        None when the model is not loaded so the caller keeps the rule-based msg.
+        """
+        try:
+            from services import medgemma_service
+
+            if not medgemma_service.is_available():
+                return None, True
+            prompt = (
+                "Daily health check-in:\n"
+                f"  Mood: {check_in_data.get('mood', '?')}\n"
+                f"  Energy: {check_in_data.get('energy_level', '?')}\n"
+                f"  Sleep (hours): {check_in_data.get('sleep_hours', '?')}\n"
+                f"  Pain: {check_in_data.get('pain_level', '?')}\n"
+                f"  Symptoms: {', '.join(check_in_data.get('symptoms', []) or []) or 'none'}\n\n"
+                "Write a warm, brief (2-3 sentence) wellness message with one "
+                "practical tip. Supportive only — not a diagnosis."
+            )
+            result = medgemma_service.generate_text(prompt, max_new_tokens=200)
+            if result.get("stub_mode"):
+                return None, True
+            return result.get("text"), False
+        except Exception:
+            return None, True
 
     def _generate_check_in_response(self, check_in: Dict[str, Any]) -> str:
         """Generate personalized response based on check-in data"""

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="SwasthyaAI">
+  <!-- Maskable: keep important content within the central 80% safe zone -->
+  <rect width="512" height="512" fill="#0d9488"/>
+  <!-- Medical cross -->
+  <g fill="#ffffff">
+    <rect x="210" y="118" width="92" height="276" rx="18"/>
+    <rect x="118" y="210" width="276" height="92" rx="18"/>
+  </g>
+  <!-- Heartbeat line overlay -->
+  <path d="M118 256 H196 L222 196 L268 320 L296 256 H394"
+        fill="none" stroke="#0d9488" stroke-width="20"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

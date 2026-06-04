@@ -31,6 +31,14 @@ class MedSigLIPInference(BaseInference):
         "dermatology", "ophthalmology", "endoscopy"
     ]
 
+    def service_available(self) -> bool:
+        """Real MedSigLIP is served via the central service layer."""
+        try:
+            from services import medsiglip_service
+            return medsiglip_service.is_available()
+        except Exception:
+            return False
+
     def _load_model_weights(self):
         """Load MedSigLIP model weights"""
         try:
@@ -78,48 +86,37 @@ class MedSigLIPInference(BaseInference):
             questions: Optional specific questions about the image
 
         Returns:
-            Dict with image analysis, findings, confidence
+            Dict with image analysis, findings, confidence (carries stub_mode)
         """
-        if not self._load_model():
-            return self._generate_stub_response(
-                modality=modality,
-                clinical_context=clinical_context
-            )
-
         try:
-            # Load and preprocess image
+            from services import medsiglip_service
+
             image = Image.open(image_path).convert("RGB")
-
-            # Build analysis prompt
-            prompt = self._build_image_prompt(modality, clinical_context, questions)
-
-            # Process image and text
-            inputs = self.processor(
-                text=prompt,
-                images=image,
-                return_tensors="pt",
-                padding=True
-            ).to(self.device)
-
-            # Generate analysis
-            import torch
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-
-            # Extract findings from model output
-            findings = self._extract_findings(outputs, modality)
-
-            # Ensure safety compliance
-            findings = self._enforce_safety(findings, modality)
-
-            return findings
-
+            svc = medsiglip_service.classify_image(image, modality=modality)
+            if not svc.get("stub_mode"):
+                findings = {
+                    "modality": modality,
+                    "top_finding": svc.get("top_finding"),
+                    "is_abnormal": svc.get("is_abnormal"),
+                    "key_findings": [
+                        f"{f['label']} ({f['probability']:.1%})"
+                        for f in svc.get("all_findings", [])[:5]
+                    ],
+                    "confidence": svc.get("confidence", 0.0),
+                    "all_findings": svc.get("all_findings", []),
+                    "clinical_context": clinical_context,
+                    "disclaimer": svc.get("disclaimer"),
+                    "model": svc.get("model"),
+                    "stub_mode": False,
+                }
+                return self._enforce_safety(findings, modality)
         except Exception as e:
-            logger.error(f"MedSigLIP inference failed: {e}")
-            return self._generate_stub_response(
-                modality=modality,
-                clinical_context=clinical_context
-            )
+            logger.error(f"MedSigLIP service analysis failed: {e}")
+
+        return self._generate_stub_response(
+            modality=modality,
+            clinical_context=clinical_context,
+        )
 
     async def classify_image(
         self,
@@ -136,52 +133,40 @@ class MedSigLIPInference(BaseInference):
             modality: Image modality
 
         Returns:
-            Dict with ranked classifications and confidences
+            Dict with ranked classifications and confidences (carries stub_mode)
         """
-        if not self._load_model():
-            return self._generate_stub_classification(candidates)
-
+        # Route through the central MedSigLIP service. It uses SIGMOID scoring
+        # (not softmax) and padding="max_length" per the SigLIP spec, returning
+        # a clearly-labelled stub when the real model is not loaded.
         try:
-            # Load image
+            from services import medsiglip_service
+
             image = Image.open(image_path).convert("RGB")
-
-            # Process image with candidate labels
-            inputs = self.processor(
-                text=candidates,
-                images=[image] * len(candidates),
-                return_tensors="pt",
-                padding=True
-            ).to(self.device)
-
-            # Get similarity scores
-            import torch
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                logits = outputs.logits_per_image[0]
-                probs = torch.softmax(logits, dim=0)
-
-            # Rank candidates
-            results = [
-                {
-                    "condition": candidates[i],
-                    "confidence": float(probs[i]),
-                    "rank": i + 1
+            svc = medsiglip_service.classify_image(
+                image, modality=modality, labels=candidates
+            )
+            if not svc.get("stub_mode"):
+                results = [
+                    {
+                        "condition": f["label"],
+                        "confidence": f["probability"],
+                        "rank": i + 1,
+                    }
+                    for i, f in enumerate(svc.get("all_findings", []))
+                ]
+                return {
+                    "classifications": results,
+                    "modality": modality,
+                    "top_finding": svc.get("top_finding"),
+                    "is_abnormal": svc.get("is_abnormal"),
+                    "disclaimer": svc.get("disclaimer"),
+                    "model": svc.get("model"),
+                    "stub_mode": False,
                 }
-                for i in range(len(candidates))
-            ]
-
-            results.sort(key=lambda x: x["confidence"], reverse=True)
-
-            return {
-                "classifications": results,
-                "modality": modality,
-                "disclaimer": "This is decision support only. Images must be reviewed by qualified radiologists/clinicians.",
-                "stub_mode": False
-            }
-
         except Exception as e:
-            logger.error(f"Image classification failed: {e}")
-            return self._generate_stub_classification(candidates)
+            logger.error(f"MedSigLIP service classification failed: {e}")
+
+        return self._generate_stub_classification(candidates)
 
     def _build_image_prompt(
         self,
@@ -227,6 +212,9 @@ class MedSigLIPInference(BaseInference):
 
     def _enforce_safety(self, findings: Dict[str, Any], modality: str) -> Dict[str, Any]:
         """Ensure image analysis complies with safety requirements"""
+
+        # Real model output: mark non-stub unless a caller already set it.
+        findings.setdefault("stub_mode", False)
 
         # Always include disclaimer
         if "disclaimer" not in findings:

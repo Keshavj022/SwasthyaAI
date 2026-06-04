@@ -1,10 +1,10 @@
 'use client'
 
 import * as Dialog from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
+import { X, AlertTriangle, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { useRescheduleAppointment, useDoctorAvailability } from '@/hooks/useAppointments'
+import { useReschedule, useAvailability, SlotConflictError } from '@/hooks/useAppointments'
 import { DateTimeSlotPicker } from './DateTimeSlotPicker'
 import type { Appointment } from '@/types'
 
@@ -12,14 +12,34 @@ interface RescheduleDialogProps {
   appointment: Appointment
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Called after a successful reschedule (e.g. to close a popover). */
+  onRescheduled?: () => void
 }
 
-export function RescheduleDialog({ appointment, open, onOpenChange }: RescheduleDialogProps) {
-  const [newSlot, setNewSlot] = useState<string | null>(null)
-  const rescheduleMutation = useRescheduleAppointment()
+function formatDateTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('en-IN', {
+      weekday: 'short', day: 'numeric', month: 'short',
+      hour: '2-digit', minute: '2-digit',
+    })
+  } catch { return iso }
+}
 
-  // Fetch all availability to find this doctor's slots
-  const { data: allDoctors, isLoading } = useDoctorAvailability()
+export function RescheduleDialog({
+  appointment,
+  open,
+  onOpenChange,
+  onRescheduled,
+}: RescheduleDialogProps) {
+  const [newSlot, setNewSlot] = useState<string | null>(null)
+  const [conflictNote, setConflictNote] = useState<string | null>(null)
+  const rescheduleMutation = useReschedule()
+
+  // Reuse the booking step-3 slot picker: fetch this doctor's live availability.
+  const { data: allDoctors, isLoading, isError, refetch } = useAvailability(
+    undefined,
+    appointment.doctorName ?? undefined
+  )
   const doctorAvail = allDoctors?.find(
     (d) => d.doctorId === appointment.doctorId || d.doctorName === appointment.doctorName
   )
@@ -32,13 +52,24 @@ export function RescheduleDialog({ appointment, open, onOpenChange }: Reschedule
         appointmentId: appointment.id,
         newDateTime: newSlot,
         patientId: appointment.patientId,
+        doctorId: appointment.doctorId,
       },
       {
         onSuccess: () => {
           toast.success('Appointment rescheduled')
+          onRescheduled?.()
           onOpenChange(false)
         },
-        onError: () => toast.error('Failed to reschedule. Please try another time.'),
+        onError: async (err) => {
+          if (err instanceof SlotConflictError) {
+            await refetch()
+            setNewSlot(null)
+            setConflictNote('That slot was just taken — please choose another time.')
+            toast.error('Slot no longer available — please choose another time')
+          } else {
+            toast.error(err.message || 'Failed to reschedule. Please try another time.')
+          }
+        },
       }
     )
   }
@@ -59,13 +90,30 @@ export function RescheduleDialog({ appointment, open, onOpenChange }: Reschedule
             </Dialog.Close>
           </div>
 
-          <p className="text-sm text-gray-600 mb-1">
+          <p className="text-sm text-gray-600">
             Doctor: <span className="font-medium">{appointment.doctorName ?? appointment.doctorId}</span>
+          </p>
+          <p className="text-xs text-gray-400 mb-1">
+            Current: {formatDateTime(appointment.dateTime)}
           </p>
           <p className="text-xs text-gray-400 mb-4">Select a new date and time:</p>
 
+          {conflictNote && (
+            <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-4">
+              <AlertTriangle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+              <p className="text-xs text-amber-800">{conflictNote}</p>
+            </div>
+          )}
+
           {isLoading ? (
             <div className="h-48 bg-gray-50 rounded-xl animate-pulse" />
+          ) : isError ? (
+            <div className="text-center py-8">
+              <p className="text-sm text-red-600 mb-2">Couldn&apos;t load availability.</p>
+              <button onClick={() => refetch()} className="text-xs text-teal-600 hover:underline">
+                Try again
+              </button>
+            </div>
           ) : slots.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-8">
               No available slots found for this doctor.
@@ -74,7 +122,7 @@ export function RescheduleDialog({ appointment, open, onOpenChange }: Reschedule
             <DateTimeSlotPicker
               slots={slots}
               selected={newSlot}
-              onChange={setNewSlot}
+              onChange={(iso) => { setNewSlot(iso); setConflictNote(null) }}
             />
           )}
 
@@ -86,11 +134,13 @@ export function RescheduleDialog({ appointment, open, onOpenChange }: Reschedule
               </button>
             </Dialog.Close>
             <button
+              type="button"
               onClick={handleConfirm}
               disabled={!newSlot || rescheduleMutation.isPending}
               className="flex-1 px-4 py-2.5 rounded-xl bg-teal-600 text-white text-sm font-medium
-                          hover:bg-teal-700 disabled:opacity-40 transition-colors"
+                          hover:bg-teal-700 disabled:opacity-40 transition-colors flex items-center justify-center gap-2"
             >
+              {rescheduleMutation.isPending && <Loader2 size={14} className="animate-spin" />}
               {rescheduleMutation.isPending ? 'Saving...' : 'Confirm'}
             </button>
           </div>

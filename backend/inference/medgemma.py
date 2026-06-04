@@ -42,6 +42,14 @@ CRITICAL RULES:
 - Never provide definitive diagnoses
 """
 
+    def service_available(self) -> bool:
+        """Real MedGemma is served via the central service layer."""
+        try:
+            from services import medgemma_service
+            return medgemma_service.is_available()
+        except Exception:
+            return False
+
     def _load_model_weights(self):
         """Load MedGemma model weights (Gemma3ForConditionalGeneration)"""
         try:
@@ -91,43 +99,35 @@ CRITICAL RULES:
             temperature: Sampling temperature
 
         Returns:
-            Dict with response, confidence, disclaimer
+            Dict with response, confidence, disclaimer (always carries stub_mode)
         """
-        if not self._load_model():
-            return self._generate_stub_response(
-                query=query,
-                task_type=task_type
-            )
-
+        # Preferred path: route through the central MedGemma service (singleton,
+        # offline, device/dtype-aware). Returns structured analysis when the
+        # real model is loaded; otherwise we fall back to the clearly-labelled
+        # stub below.
         try:
-            # Build prompt with safety constraints
-            prompt = self._build_prompt(query, patient_context, task_type)
+            from services import medgemma_service
 
-            # Generate response using the processor (handles tokenization)
-            inputs = self.processor(text=prompt, return_tensors="pt").to(self.device)
-
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_length,
-                    temperature=temperature,
-                    do_sample=True,
-                )
-
-            generated_text = self.processor.decode(outputs[0], skip_special_tokens=True)
-
-            # Extract JSON response from generated text
-            response_data = self._parse_model_output(generated_text)
-
-            # Ensure safety compliance
-            response_data = self._enforce_safety(response_data)
-
-            return response_data
-
+            svc = medgemma_service.generate_structured(
+                prompt=self._build_prompt(query, patient_context, task_type),
+                output_schema={
+                    "analysis_summary": "...",
+                    "key_findings": ["..."],
+                    "confidence": 0.0,
+                    "uncertainty_note": "...",
+                    "recommended_next_steps": ["..."],
+                },
+                max_new_tokens=max_length,
+            )
+            if not svc.get("stub_mode") and svc.get("data"):
+                response_data = self._enforce_safety(svc["data"])
+                response_data["stub_mode"] = False
+                response_data.setdefault("model", svc.get("model"))
+                return response_data
         except Exception as e:
-            logger.error(f"MedGemma inference failed: {e}")
-            return self._generate_stub_response(query=query, task_type=task_type)
+            logger.error(f"MedGemma service inference failed: {e}")
+
+        return self._generate_stub_response(query=query, task_type=task_type)
 
     async def generate_differential_diagnosis(
         self,
@@ -144,36 +144,38 @@ CRITICAL RULES:
             vital_signs: Current vital signs
 
         Returns:
-            Dict with ranked differential diagnoses
+            Dict with ranked differential diagnoses (always carries stub_mode)
         """
-        if not self._load_model():
-            return self._generate_stub_differential(symptoms)
-
         try:
-            # Build differential diagnosis prompt
-            prompt = self._build_differential_prompt(symptoms, patient_history, vital_signs)
+            from services import medgemma_service
 
-            # Generate response
-            inputs = self.processor(text=prompt, return_tensors="pt").to(self.device)
-
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=512,
-                    temperature=0.7,
-                    do_sample=True,
-                )
-
-            generated_text = self.processor.decode(outputs[0], skip_special_tokens=True)
-            response_data = self._parse_model_output(generated_text)
-            response_data = self._enforce_safety(response_data)
-
-            return response_data
-
+            svc = medgemma_service.generate_structured(
+                prompt=self._build_differential_prompt(
+                    symptoms, patient_history, vital_signs
+                ),
+                output_schema={
+                    "differential_diagnoses": [
+                        {
+                            "condition": "...",
+                            "confidence": 0.0,
+                            "supporting_evidence": ["..."],
+                            "contradicting_evidence": ["..."],
+                        }
+                    ],
+                    "red_flags": ["..."],
+                    "recommended_workup": ["..."],
+                    "missing_information": ["..."],
+                },
+            )
+            if not svc.get("stub_mode") and svc.get("data"):
+                response_data = self._enforce_safety(svc["data"])
+                response_data["stub_mode"] = False
+                response_data.setdefault("model", svc.get("model"))
+                return response_data
         except Exception as e:
-            logger.error(f"Differential diagnosis failed: {e}")
-            return self._generate_stub_differential(symptoms)
+            logger.error(f"MedGemma differential service inference failed: {e}")
+
+        return self._generate_stub_differential(symptoms)
 
     def _build_prompt(
         self,
@@ -265,6 +267,9 @@ Provide differential diagnosis in JSON format:
 
     def _enforce_safety(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure response complies with safety requirements"""
+
+        # Real model output: mark non-stub unless a caller already set it.
+        response.setdefault("stub_mode", False)
 
         # Always include disclaimer
         if "disclaimer" not in response:

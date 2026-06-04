@@ -53,6 +53,15 @@ async def lifespan(app: FastAPI):
     _seed_admin()
     register_all_agents()
 
+    # Preload local AI models if enabled (MEDGEMMA_MODE / MEDSIGLIP_MODE /
+    # MEDASR_MODE). Safe no-op + stub fallback when disabled, deps missing,
+    # or weights absent — never blocks startup.
+    try:
+        from services.model_loader import preload_models
+        preload_models()
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"⚠️  AI model preload skipped ({type(exc).__name__}: {exc}); running in stub mode")
+
     print(f"🤖 Agent orchestrator ready\n")
     yield
     print("\n👋 Shutting down gracefully...")
@@ -99,12 +108,37 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
+# Lab Results (Task 11) — authenticated users. Defensive import so a build-time
+# gap in this module cannot take down the whole API.
+try:
+    from routers import lab_results as lab_results_router
+
+    app.include_router(
+        lab_results_router.router,
+        prefix="/api",
+        dependencies=[Depends(get_current_user)],
+    )
+except Exception as exc:  # pragma: no cover - defensive
+    print(f"⚠️  Lab Results router not loaded ({type(exc).__name__}: {exc})")
+
 # Admin-only routes
 app.include_router(
     audit_router.router,
     prefix="/api",
     dependencies=[Depends(require_admin)],
 )
+
+# Admin management (Task 10) — admin-only.
+try:
+    from routers import admin as admin_router
+
+    app.include_router(
+        admin_router.router,
+        prefix="/api",
+        dependencies=[Depends(require_admin)],
+    )
+except Exception as exc:  # pragma: no cover - defensive
+    print(f"⚠️  Admin router not loaded ({type(exc).__name__}: {exc})")
 
 
 @app.get("/")

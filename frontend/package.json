@@ -27,7 +27,7 @@
     "date-fns": "^3.6.0",
     "jose": "^5.2.0",
     "lucide-react": "^0.400.0",
-    "next": "15.1.6",
+    "next": "^15.5.14",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.51.0",

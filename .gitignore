@@ -13,6 +13,12 @@
 # IDEs
 .vscode/
 .idea/
-*.md
 
+# Local documentation / planning docs (kept out of version control)
+/docs/
+
+# Downloaded AI model weights
 /models/
+
+# Tooling
+.claude-flow/

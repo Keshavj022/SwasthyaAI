@@ -13,7 +13,7 @@ Provides comprehensive patient data management:
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import sys
 from pathlib import Path
 from datetime import date as date_type
@@ -24,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database import get_db
 from models.health_monitoring import CheckIn
 from models.patient import Patient, Visit, Prescription, Diagnosis, Allergy
+from models.user import User
+from services.auth_service import get_current_user
 from schemas.patient import (
     PatientCreate, PatientUpdate, PatientResponse,
     VisitCreate, VisitResponse,
@@ -35,12 +37,54 @@ from schemas.patient import (
 from agents.health_memory_agent import HealthMemoryAgent
 
 
+def _ensure_can_access_patient(current_user: User, patient_id: str) -> None:
+    """Object-level authorization for patient-scoped data.
+
+    - Doctors and admins may access any patient record.
+    - A patient may ONLY access their own record. The frontend uses the User UUID
+      (current_user.id) as the patient identifier, so a patient is authorized iff
+      the requested patient_id matches their own id.
+
+    Raises 403 (not 404) so the existence of other records is not leaked, while
+    still allowing the handler's own 404 for truly-missing records the user owns.
+    """
+    if current_user.role in ("doctor", "admin"):
+        return
+    if str(patient_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to access this patient record")
+
+
 class CheckInCreate(BaseModel):
     mood: Optional[int] = None       # 1-10
     energy: Optional[int] = None     # 1-10
     sleep: Optional[float] = None    # hours
     symptoms: List[str] = []
     painLevel: Optional[int] = None  # 1-10
+
+    @field_validator("mood", "energy", "painLevel")
+    @classmethod
+    def _scale_1_10(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v < 1 or v > 10:
+            raise ValueError("Value must be between 1 and 10")
+        return v
+
+    @field_validator("sleep")
+    @classmethod
+    def _sleep_bounds(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if v < 0 or v > 24:
+            raise ValueError("Sleep hours must be between 0 and 24")
+        return v
+
+    @field_validator("symptoms")
+    @classmethod
+    def _symptoms_bounds(cls, v: List[str]) -> List[str]:
+        if v and len(v) > 50:
+            raise ValueError("Too many symptoms (max 50)")
+        return v
 
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -54,7 +98,8 @@ _health_memory = HealthMemoryAgent()
 @router.post("", response_model=PatientResponse)
 async def create_patient(
     patient: PatientCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new patient profile.
@@ -78,6 +123,10 @@ async def create_patient(
         }
         ```
     """
+    # Creating patient profiles is a clinical/admin operation.
+    if current_user.role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to create patient records")
+
     # Check if patient already exists
     existing = db.query(Patient).filter(Patient.patient_id == patient.patient_id).first()
     if existing:
@@ -95,7 +144,8 @@ async def create_patient(
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient(
     patient_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get patient by ID.
@@ -107,8 +157,10 @@ async def get_patient(
         Patient record
 
     Raises:
+        403: Patient may only access their own record
         404: Patient not found
     """
+    _ensure_can_access_patient(current_user, patient_id)
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -124,7 +176,8 @@ async def get_patient(
 async def update_patient(
     patient_id: str,
     patient_update: PatientUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Update patient information.
@@ -136,6 +189,7 @@ async def update_patient(
     Returns:
         Updated patient record
     """
+    _ensure_can_access_patient(current_user, patient_id)
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -159,10 +213,13 @@ async def update_patient(
 async def delete_patient(
     patient_id: str,
     hard_delete: bool = Query(False, description="Permanently delete (true) or soft delete (false)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Delete patient record.
+
+    Only doctors and admins may delete patient records.
 
     Args:
         patient_id: Patient identifier
@@ -171,6 +228,8 @@ async def delete_patient(
     Returns:
         Confirmation message
     """
+    if current_user.role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete patient records")
     patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
 
     if not patient:
@@ -193,7 +252,8 @@ async def delete_patient(
 @router.get("/{patient_id}/summary", response_model=PatientSummaryResponse)
 async def get_patient_summary(
     patient_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get comprehensive patient summary.
@@ -211,6 +271,7 @@ async def get_patient_summary(
     Returns:
         Complete patient summary
     """
+    _ensure_can_access_patient(current_user, patient_id)
     summary = _health_memory.get_patient_summary(db, patient_id)
 
     if not summary:
@@ -223,7 +284,8 @@ async def get_patient_summary(
 async def get_patient_timeline(
     patient_id: str,
     months: int = Query(12, ge=1, le=60, description="Number of months to include"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get chronological timeline of all patient events.
@@ -240,6 +302,7 @@ async def get_patient_timeline(
         GET /api/patients/P12345/timeline?months=6
         ```
     """
+    _ensure_can_access_patient(current_user, patient_id)
     timeline = _health_memory.get_patient_timeline(db, patient_id, months)
 
     if not timeline:
@@ -252,7 +315,8 @@ async def get_patient_timeline(
 async def search_patient_history(
     patient_id: str,
     query: str = Query(..., min_length=2, description="Search term"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Search patient history for specific term.
@@ -275,6 +339,7 @@ async def search_patient_history(
         GET /api/patients/P12345/search?query=aspirin
         ```
     """
+    _ensure_can_access_patient(current_user, patient_id)
     results = _health_memory.search_history(db, patient_id, query)
 
     if not results:
@@ -289,7 +354,8 @@ async def search_patient_history(
 async def create_visit(
     patient_id: str,
     visit: VisitCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new visit record.
@@ -301,6 +367,8 @@ async def create_visit(
     Returns:
         Created visit record
     """
+    if current_user.role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to create visit records")
     # Verify patient exists
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
@@ -331,7 +399,8 @@ async def create_visit(
 async def list_visits(
     patient_id: str,
     limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     List patient visits (most recent first).
@@ -343,6 +412,7 @@ async def list_visits(
     Returns:
         List of visits
     """
+    _ensure_can_access_patient(current_user, patient_id)
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -364,7 +434,8 @@ async def list_visits(
 async def create_prescription(
     patient_id: str,
     prescription: PrescriptionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new prescription record.
@@ -376,6 +447,8 @@ async def create_prescription(
     Returns:
         Created prescription record
     """
+    if current_user.role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to create prescriptions")
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -399,7 +472,8 @@ async def create_prescription(
 async def list_prescriptions(
     patient_id: str,
     status: Optional[str] = Query(None, description="Filter by status (active, completed, discontinued)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     List patient prescriptions.
@@ -411,6 +485,7 @@ async def list_prescriptions(
     Returns:
         List of prescriptions
     """
+    _ensure_can_access_patient(current_user, patient_id)
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -434,7 +509,8 @@ async def update_prescription(
     patient_id: str,
     prescription_id: int,
     prescription_update: PrescriptionUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Update prescription (typically to discontinue or change status).
@@ -447,6 +523,8 @@ async def update_prescription(
     Returns:
         Updated prescription
     """
+    if current_user.role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to update prescriptions")
     prescription = db.query(Prescription).join(Patient).filter(
         Patient.patient_id == patient_id,
         Prescription.id == prescription_id
@@ -471,7 +549,8 @@ async def update_prescription(
 async def create_diagnosis(
     patient_id: str,
     diagnosis: DiagnosisCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new diagnosis record.
@@ -483,6 +562,8 @@ async def create_diagnosis(
     Returns:
         Created diagnosis record
     """
+    if current_user.role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to create diagnoses")
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -506,7 +587,8 @@ async def create_diagnosis(
 async def list_diagnoses(
     patient_id: str,
     status: Optional[str] = Query(None, description="Filter by status (active, resolved, chronic)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     List patient diagnoses.
@@ -518,6 +600,7 @@ async def list_diagnoses(
     Returns:
         List of diagnoses
     """
+    _ensure_can_access_patient(current_user, patient_id)
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -542,7 +625,8 @@ async def list_diagnoses(
 async def create_allergy(
     patient_id: str,
     allergy: AllergyCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new allergy record.
@@ -556,6 +640,8 @@ async def create_allergy(
     Returns:
         Created allergy record
     """
+    # Doctors/admins for any patient; a patient may only add to their own record.
+    _ensure_can_access_patient(current_user, patient_id)
     patient = db.query(Patient).filter(
         Patient.patient_id == patient_id,
         Patient.active == True
@@ -578,7 +664,8 @@ async def create_allergy(
 @router.get("/{patient_id}/allergies", response_model=List[AllergyResponse])
 async def list_allergies(
     patient_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     List patient allergies.
@@ -591,6 +678,7 @@ async def list_allergies(
     Returns:
         List of allergies
     """
+    _ensure_can_access_patient(current_user, patient_id)
     allergies = _health_memory.get_allergies(db, patient_id)
 
     if allergies is None:
@@ -607,8 +695,10 @@ async def get_health_history(
     patient_id: str,
     limit: int = Query(7, ge=1, le=90),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Return last N daily check-ins for a patient (user_id = patient_id)."""
+    _ensure_can_access_patient(current_user, patient_id)
     rows = (
         db.query(CheckIn)
         .filter(CheckIn.user_id == patient_id)
@@ -636,8 +726,10 @@ async def submit_check_in(
     patient_id: str,
     payload: CheckInCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Save a daily check-in for a patient. Upserts on today's date."""
+    _ensure_can_access_patient(current_user, patient_id)
     today = date_type.today()
     existing = (
         db.query(CheckIn)

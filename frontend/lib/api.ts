@@ -16,6 +16,12 @@ import type {
   MedicalDocument,
   AuditLog,
   LabResult,
+  LabResultInput,
+  LabResultsResponse,
+  SavedLabResultSet,
+  AdminUser,
+  SystemStats,
+  AIModelStatus,
 } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -314,16 +320,46 @@ export const orchestratorApi = {
   ): Promise<AgentResponse> => {
     const { data } = await apiClient.post('/api/orchestrator/query', {
       message: query,
-      patient_id: patientId,
-      context,
+      context: { ...(context || {}), ...(patientId ? { patient_id: patientId } : {}) },
     })
-    // Normalise backend envelope → AgentResponse
+    // Normalise the backend envelope → AgentResponse while PRESERVING the full
+    // structured payload (differential_diagnoses, red_flags, findings, etc.).
+    const payload = data.data ?? {}
     return {
-      response: data.data?.response ?? data.data?.task ?? '',
+      response: payload.response ?? payload.task ?? payload.summary ?? '',
       agentUsed: data.agent ?? 'unknown',
       confidence: data.confidence?.score ?? 0,
       disclaimer: data.disclaimer ?? '',
       reasoning: data.reasoning ?? undefined,
+      data: payload,
+      emergency: data.emergency ?? false,
+      auditId: data.audit_id ?? undefined,
+      intent: data.intent ?? null,
+      isStub: Boolean(payload.stub_mode ?? payload.is_stub ?? data.stub_mode),
+    }
+  },
+
+  /** Send base64 audio to the voice agent for transcription + routing. */
+  transcribe: async (
+    audioBase64: string,
+    audioFormat: string,
+    mode: 'symptom_reporting' | 'medical_dictation' | 'voice_query' | 'general' = 'general'
+  ): Promise<AgentResponse> => {
+    const { data } = await apiClient.post('/api/orchestrator/query', {
+      audio_base64: audioBase64,
+      audio_format: audioFormat,
+      voice_mode: mode,
+    }, { timeout: 120_000 })
+    const payload = data.data ?? {}
+    return {
+      response: payload.transcription ?? payload.response ?? '',
+      agentUsed: data.agent ?? 'voice',
+      confidence: data.confidence?.score ?? payload.confidence ?? 0,
+      disclaimer: data.disclaimer ?? '',
+      data: payload,
+      emergency: data.emergency ?? false,
+      auditId: data.audit_id ?? undefined,
+      isStub: Boolean(payload.stub_mode ?? data.stub_mode),
     }
   },
 }
@@ -403,19 +439,34 @@ export const appointmentApi = {
 // ---------------------------------------------------------------------------
 
 export const documentApi = {
-  upload: async (patientId: string, file: File): Promise<MedicalDocument> => {
+  upload: async (
+    patientId: string,
+    file: File,
+    meta?: { documentType?: string; title?: string },
+    onProgress?: (percent: number) => void
+  ): Promise<MedicalDocument> => {
     const form = new FormData()
     form.append('file', file)
     form.append('patient_id', patientId)
+    // Backend requires document_type + title; default sensibly.
+    form.append('document_type', meta?.documentType ?? 'other')
+    form.append('title', meta?.title ?? file.name)
     const { data } = await apiClient.post('/api/documents/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (evt) => {
+        if (onProgress && evt.total) {
+          onProgress(Math.round((evt.loaded / evt.total) * 100))
+        }
+      },
     })
     return data
   },
 
   getByPatient: async (patientId: string): Promise<MedicalDocument[]> => {
-    const { data } = await apiClient.get(`/api/documents?patient_id=${patientId}`)
-    return data
+    // Matches backend route GET /api/documents/patient/{patient_id}, which
+    // returns an envelope { patient_id, total_documents, documents: [...] }.
+    const { data } = await apiClient.get(`/api/documents/patient/${patientId}`)
+    return Array.isArray(data) ? data : (data?.documents ?? [])
   },
 
   delete: async (documentId: string): Promise<{ success: boolean }> => {
@@ -426,6 +477,66 @@ export const documentApi = {
   getUrl: (documentId: string): string => {
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
     return `${base}/api/documents/${documentId}/download`
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Lab Results API (Task 11)
+// ---------------------------------------------------------------------------
+
+export const labResultsApi = {
+  interpret: async (payload: {
+    results: LabResultInput[]
+    patient_id?: string
+    patient_age: number
+    patient_sex: string
+  }): Promise<LabResultsResponse> => {
+    const { data } = await apiClient.post('/api/lab-results/interpret', payload, { timeout: 60_000 })
+    return data
+  },
+
+  save: async (payload: {
+    patient_id: string
+    results: LabResultInput[]
+    report_date: string
+    lab_name: string
+  }): Promise<{ id: string; saved: boolean }> => {
+    const { data } = await apiClient.post('/api/lab-results/save', payload)
+    return data
+  },
+
+  getByPatient: async (patientId: string): Promise<SavedLabResultSet[]> => {
+    const { data } = await apiClient.get(`/api/lab-results/${patientId}`)
+    return data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Admin API (Task 10)
+// ---------------------------------------------------------------------------
+
+export const adminApi = {
+  getUsers: async (params?: { role?: string; q?: string }): Promise<AdminUser[]> => {
+    const qs = new URLSearchParams()
+    if (params?.role) qs.append('role', params.role)
+    if (params?.q) qs.append('q', params.q)
+    const { data } = await apiClient.get(`/api/admin/users?${qs}`)
+    return data
+  },
+
+  updateUser: async (userId: string, payload: Partial<{ role: string; isActive: boolean }>): Promise<AdminUser> => {
+    const { data } = await apiClient.patch(`/api/admin/users/${userId}`, payload)
+    return data
+  },
+
+  deleteUser: async (userId: string): Promise<{ success: boolean }> => {
+    const { data } = await apiClient.delete(`/api/admin/users/${userId}`)
+    return data
+  },
+
+  getStats: async (): Promise<SystemStats> => {
+    const { data } = await apiClient.get('/api/admin/stats')
+    return data
   },
 }
 
@@ -464,6 +575,12 @@ export const healthApi = {
 
   ping: async (): Promise<{ status: string }> => {
     const { data } = await apiClient.get('/api/health/ping')
+    return data
+  },
+
+  /** AI model status (Task 12) — which local models are enabled/loaded vs stub. */
+  aiStatus: async (): Promise<{ models: AIModelStatus[]; anyLoaded: boolean }> => {
+    const { data } = await apiClient.get('/api/health/ai-status')
     return data
   },
 }

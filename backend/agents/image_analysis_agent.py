@@ -23,7 +23,23 @@ Production: Integrate MedSigLIP for vision-language model inference
 from orchestrator.base import BaseAgent, AgentRequest, AgentResponse
 from typing import List, Dict, Optional, Any
 import base64
+import logging
+from io import BytesIO
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Map the agent's internal modality keys -> MedSigLIP service label-set keys.
+_MODALITY_TO_SIGLIP = {
+    "chest_xray": "chest_xray",
+    "ct_chest": "chest_xray",
+    "ct_head": "general",
+    "ct_abdomen": "general",
+    "mri_brain": "general",
+    "dermatology": "dermatology",
+    "pathology": "histopathology",
+    "other": "general",
+}
 
 
 class ImageAnalysisAgent(BaseAgent):
@@ -98,17 +114,23 @@ class ImageAnalysisAgent(BaseAgent):
                 f"Supported modalities: {', '.join(self.supported_modalities.keys())}"
             )
 
+        # Resolve a single base64 payload (image_data or first attachment).
+        if not image_data and request.attachments:
+            image_data = request.attachments[0]
+
         # Perform image analysis based on type
         if analysis_type == "finding_detection":
             result = await self._detect_findings(
                 image_path=image_path,
                 modality=modality,
-                clinical_context=clinical_context
+                clinical_context=clinical_context,
+                image_data=image_data,
             )
         elif analysis_type == "abnormality_classification":
             result = await self._classify_abnormality(
                 image_path=image_path,
-                modality=modality
+                modality=modality,
+                image_data=image_data,
             )
         elif analysis_type == "region_description":
             result = await self._describe_region(
@@ -123,41 +145,72 @@ class ImageAnalysisAgent(BaseAgent):
 
         return result
 
+    def _load_pil_image(
+        self,
+        image_path: Optional[str],
+        image_data: Optional[str],
+    ):
+        """Load a PIL image from a base64 payload or a file path (or None)."""
+        try:
+            from PIL import Image as PILImage
+        except Exception:
+            return None
+        try:
+            if image_data:
+                raw = image_data
+                # Strip a possible data URL prefix.
+                if isinstance(raw, str) and "," in raw[:64] and raw.lstrip().startswith("data:"):
+                    raw = raw.split(",", 1)[1]
+                decoded = base64.b64decode(raw)
+                return PILImage.open(BytesIO(decoded)).convert("RGB")
+            if image_path and Path(image_path).exists():
+                return PILImage.open(image_path).convert("RGB")
+        except Exception as exc:
+            logger.error(f"Image decode failed: {exc}")
+        return None
+
     async def _detect_findings(
         self,
         image_path: Optional[str],
         modality: str,
-        clinical_context: Optional[Dict]
+        clinical_context: Optional[Dict],
+        image_data: Optional[str] = None,
     ) -> AgentResponse:
         """
-        Detect visual findings in medical image using MedSigLIP.
+        Detect visual findings in a medical image.
 
-        In production:
-        1. Load image
-        2. Preprocess for MedSigLIP
-        3. Extract visual features
-        4. Compare with finding templates
-        5. Generate natural language descriptions
-        6. Return structured findings with confidence
+        Two-stage when models are loaded:
+          Stage 1 — MedSigLIP zero-shot classification (sigmoid scoring).
+          Stage 2 — MedGemma radiology-style report using Stage 1 context.
+        Falls back to a clearly-labelled stub (stub_mode=True) otherwise.
         """
-        # Call MedSigLIP model (stub for now)
-        findings_data = await self._call_medsigLIP_finding_detection(
-            image_path=image_path,
-            modality=modality,
-            clinical_context=clinical_context
+        real_findings = await self._real_finding_detection(
+            image_path=image_path, image_data=image_data, modality=modality,
+            clinical_context=clinical_context,
         )
+        if real_findings is not None:
+            findings_data = real_findings
+        else:
+            # Stub fallback — keep structured demo output, mark it non-authoritative.
+            findings_data = await self._call_medsigLIP_finding_detection(
+                image_path=image_path,
+                modality=modality,
+                clinical_context=clinical_context,
+            )
+            findings_data["stub_mode"] = True
 
         # Parse findings
         findings = findings_data["findings"]
         overall_impression = findings_data["impression"]
         confidence = findings_data["confidence"]
+        stub_mode = findings_data.get("stub_mode", True)
 
         # Identify red flags
         red_flags = self._identify_imaging_red_flags(findings, modality)
 
         # Determine if escalation needed
         requires_escalation = len(red_flags) > 0 or any(
-            f["severity"] in ["critical", "urgent"] for f in findings
+            f.get("severity") in ["critical", "urgent"] for f in findings
         )
 
         # Build response data
@@ -171,6 +224,13 @@ class ImageAnalysisAgent(BaseAgent):
             "clinical_correlation": self._get_clinical_correlation_notes(modality),
             "recommended_next_steps": findings_data.get("next_steps", []),
             "limitations": self._get_limitations(),
+            "models_used": findings_data.get("models_used", []),
+            "report": findings_data.get("report"),
+            "stub_mode": stub_mode,
+            "stub_note": (
+                "AI model not loaded — demo output. Findings below are NOT real "
+                "image analysis."
+            ) if stub_mode else None,
             "disclaimer": self._get_imaging_disclaimer()
         }
 
@@ -188,20 +248,58 @@ class ImageAnalysisAgent(BaseAgent):
     async def _classify_abnormality(
         self,
         image_path: Optional[str],
-        modality: str
+        modality: str,
+        image_data: Optional[str] = None,
     ) -> AgentResponse:
         """
-        Classify abnormality in medical image.
+        Classify abnormality in a medical image.
 
-        For dermatology: benign vs concerning lesion
-        For chest X-ray: normal vs abnormal
-        For CT: specific finding classification
+        Uses real MedSigLIP zero-shot scoring when available; otherwise returns
+        a clearly-labelled stub (stub_mode=True).
         """
-        classification_data = await self._call_medsigLIP_classification(
-            image_path=image_path,
-            modality=modality
-        )
+        classification_data = None
+        try:
+            from services import medsiglip_service
 
+            if medsiglip_service.is_available():
+                image = self._load_pil_image(image_path, image_data)
+                if image is not None:
+                    siglip_key = _MODALITY_TO_SIGLIP.get(modality, "general")
+                    cls = medsiglip_service.classify_image(image, modality=siglip_key)
+                    if not cls.get("stub_mode"):
+                        is_abnormal = bool(cls.get("is_abnormal"))
+                        classification_data = {
+                            "classification": (
+                                f"Abnormal — {cls.get('top_finding')}" if is_abnormal
+                                else f"Likely normal — {cls.get('top_finding')}"
+                            ),
+                            "confidence": float(cls.get("confidence") or 0.0),
+                            "reasoning": (
+                                "MedSigLIP zero-shot classification (sigmoid scoring)."
+                            ),
+                            "characteristics": [
+                                f"{f['label']} ({f['probability']:.1%})"
+                                for f in cls.get("all_findings", [])[:5]
+                            ],
+                            "differential": [],
+                            "red_flags": (
+                                ["Abnormal features — specialist review recommended"]
+                                if is_abnormal else []
+                            ),
+                            "requires_specialist": is_abnormal,
+                            "stub_mode": False,
+                        }
+        except Exception as exc:
+            logger.error(f"MedSigLIP abnormality classification failed: {exc}")
+
+        if classification_data is None:
+            classification_data = await self._call_medsigLIP_classification(
+                image_path=image_path,
+                modality=modality
+            )
+            classification_data["stub_mode"] = True
+
+        stub_mode = classification_data.get("stub_mode", True)
         data = {
             "modality": self.supported_modalities[modality],
             "analysis_type": "abnormality_classification",
@@ -210,6 +308,10 @@ class ImageAnalysisAgent(BaseAgent):
             "reasoning": classification_data["reasoning"],
             "characteristics": classification_data.get("characteristics", []),
             "differential_considerations": classification_data.get("differential", []),
+            "stub_mode": stub_mode,
+            "stub_note": (
+                "AI model not loaded — demo output, not a real classification."
+            ) if stub_mode else None,
             "disclaimer": self._get_imaging_disclaimer()
         }
 
@@ -243,6 +345,10 @@ class ImageAnalysisAgent(BaseAgent):
             "description": description_data["description"],
             "anatomical_structures": description_data.get("structures", []),
             "notable_features": description_data.get("features", []),
+            "stub_mode": True,
+            "stub_note": (
+                "AI model not loaded — demo output, not a real region description."
+            ),
             "disclaimer": self._get_imaging_disclaimer()
         }
 
@@ -255,6 +361,93 @@ class ImageAnalysisAgent(BaseAgent):
             red_flags=[],
             requires_escalation=False
         )
+
+    async def _real_finding_detection(
+        self,
+        image_path: Optional[str],
+        image_data: Optional[str],
+        modality: str,
+        clinical_context: Optional[Dict],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Real two-stage analysis via MedSigLIP (+ optional MedGemma report).
+
+        Returns a findings dict (stub_mode=False) on success, or None when the
+        image model is unavailable / the image cannot be decoded — letting the
+        caller fall back to the labelled stub.
+        """
+        try:
+            from services import medsiglip_service, medgemma_service
+        except Exception:
+            return None
+
+        if not medsiglip_service.is_available():
+            return None
+
+        image = self._load_pil_image(image_path, image_data)
+        if image is None:
+            return None
+
+        siglip_key = _MODALITY_TO_SIGLIP.get(modality, "general")
+        cls = medsiglip_service.classify_image(image, modality=siglip_key)
+        if cls.get("stub_mode"):
+            return None
+
+        models_used = ["google/medsiglip-448"]
+        top = cls.get("top_finding") or "finding"
+        confidence = float(cls.get("confidence") or 0.0)
+        is_abnormal = bool(cls.get("is_abnormal"))
+
+        findings = [
+            {
+                "finding": f["label"],
+                "location": "see image",
+                "severity": "moderate" if is_abnormal and i == 0 else "mild",
+                "confidence": f["probability"],
+                "description": f["label"],
+                "differential": [],
+            }
+            for i, f in enumerate(cls.get("all_findings", [])[:5])
+            if f["probability"] >= 0.30 or i == 0
+        ]
+
+        impression = (
+            f"MedSigLIP top match: {top} (confidence {confidence:.1%}). "
+            + ("Abnormal features suggested — " if is_abnormal else "Appears within normal limits — ")
+            + "radiologist review required for definitive interpretation."
+        )
+
+        # Stage 2: optional MedGemma natural-language report (image+text).
+        report = None
+        if medgemma_service.is_available():
+            ctx = (
+                f"Imaging modality: {modality}\n"
+                f"MedSigLIP zero-shot top finding: {top} ({confidence:.1%}); "
+                f"abnormal={is_abnormal}.\n"
+                f"Clinical context: {clinical_context or 'not provided'}\n\n"
+                "Write a concise radiology-style report: Impression, Findings, "
+                "Recommendations, and any urgent flags. Decision support only."
+            )
+            gem = medgemma_service.generate_text(ctx, image=image, max_new_tokens=400)
+            if not gem.get("stub_mode") and gem.get("text"):
+                report = gem["text"]
+                impression = report
+                models_used.append("MedGemma")
+
+        return {
+            "image_quality": "adequate",
+            "confidence": confidence,
+            "findings": findings,
+            "regions": [],
+            "impression": impression,
+            "report": report,
+            "next_steps": [
+                "Radiologist/specialist review required",
+                "Correlate with clinical presentation",
+            ],
+            "models_used": models_used,
+            "stub_mode": False,
+        }
 
     async def _call_medsigLIP_finding_detection(
         self,

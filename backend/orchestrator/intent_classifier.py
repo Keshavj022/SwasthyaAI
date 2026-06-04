@@ -52,11 +52,14 @@ class IntentClassifier:
         # Emergency keywords (highest priority)
         self.emergency_patterns = [
             r"\b(emergency|urgent|critical|severe)\b",
-            r"\b(chest pain|heart attack|stroke|seizure)\b",
-            r"\b(can't breathe|difficulty breathing|choking)\b",
-            r"\b(unconscious|unresponsive|passed out)\b",
-            r"\b(severe bleeding|hemorrhage)\b",
-            r"\b(suicide|kill myself|self harm)\b",
+            r"\b(chest pain|heart attack|cardiac arrest|stroke|seizure|seizing)\b",
+            r"\b(can'?t breathe|difficulty breathing|short(ness)? of breath|choking)\b",
+            r"\b(anaphylaxis|anaphylactic|throat (closing|swelling))\b",
+            r"\b(unconscious|unresponsive|passed out|fainted|collapsed)\b",
+            r"\b(severe bleeding|hemorrhage|bleeding (heavily|won'?t stop))\b",
+            r"\b(overdose|poison(ing|ed)?)\b",
+            r"\b(numbness|weakness) (on|in) one side|face drooping|slurred speech\b",
+            r"\b(suicid\w*|kill myself|end my life|self.?harm)\b",
         ]
 
         # Agent capability patterns (keyword → agent mapping)
@@ -86,6 +89,12 @@ class IntentClassifier:
                 r"\b(side effect|interaction|contraindication)\b",
                 r"\b(dosage|how much|how often|when to take)\b",
                 r"\b(aspirin|ibuprofen|tylenol|antibiotic)\b",
+            ],
+            "lab_results": [
+                r"\b(lab|labs|lab results?|blood test|blood work|test results?)\b",
+                r"\b(cbc|hba1c|a1c|cholesterol|ldl|hdl|triglycerides?|creatinine)\b",
+                r"\b(hemoglobin|glucose|tsh|electrolytes?|sodium|potassium|platelets?)\b",
+                r"\b(interpret (my )?(lab|blood|test) results?|what does my (lab|blood) )\b",
             ],
             "communication": [
                 r"\b(explain|what is|tell me about|describe)\b",

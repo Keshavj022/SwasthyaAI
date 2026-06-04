@@ -9,12 +9,20 @@ from datetime import datetime
 
 class QueryRequest(BaseModel):
     """
-    Request schema for /api/orchestrator/query endpoint
+    Request schema for /api/orchestrator/query endpoint.
+
+    SECURITY: user_id is IGNORED if supplied — the authenticated user's id is
+    always derived from the JWT server-side. The optional field is kept only for
+    backward compatibility with older clients and never trusted.
     """
-    user_id: str = Field(..., description="Unique user identifier")
-    message: str = Field(..., min_length=1, description="User query or message")
+    user_id: Optional[str] = Field(default=None, description="(Ignored) derived from auth token server-side")
+    message: Optional[str] = Field(default="", description="User query or message")
     attachments: Optional[List[str]] = Field(default=[], description="List of attachment IDs (images, files)")
     context: Optional[Dict[str, Any]] = Field(default={}, description="Additional context (user_type, session_id, etc.)")
+    # Voice input (Task 12) — base64-encoded audio routed to the voice agent
+    audio_base64: Optional[str] = Field(default=None, description="Base64-encoded audio for transcription")
+    audio_format: Optional[str] = Field(default=None, description="Audio container/format, e.g. 'webm', 'wav'")
+    voice_mode: Optional[str] = Field(default=None, description="symptom_reporting | medical_dictation | voice_query | general")
 
     class Config:
         json_schema_extra = {

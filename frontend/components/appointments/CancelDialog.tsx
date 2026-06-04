@@ -1,9 +1,9 @@
 'use client'
 
 import * as Dialog from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
+import { X, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
-import { useCancelAppointment } from '@/hooks/useAppointments'
+import { useCancel } from '@/hooks/useAppointments'
 import type { Appointment } from '@/types'
 import { AppointmentStatusBadge } from './AppointmentStatusBadge'
 
@@ -11,6 +11,8 @@ interface CancelDialogProps {
   appointment: Appointment
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Called after a successful cancellation (e.g. to close a popover). */
+  onCancelled?: () => void
 }
 
 function formatDateTime(iso: string): string {
@@ -22,18 +24,30 @@ function formatDateTime(iso: string): string {
   } catch { return iso }
 }
 
-export function CancelDialog({ appointment, open, onOpenChange }: CancelDialogProps) {
-  const cancelMutation = useCancelAppointment()
+/** Whether the appointment is 24+ hours away (eligible for a full refund). */
+function isRefundEligible(iso: string): boolean {
+  const diffMs = new Date(iso).getTime() - Date.now()
+  return diffMs >= 24 * 60 * 60 * 1000
+}
+
+export function CancelDialog({ appointment, open, onOpenChange, onCancelled }: CancelDialogProps) {
+  const cancelMutation = useCancel()
+  const refundEligible = isRefundEligible(appointment.dateTime)
 
   function handleConfirm() {
     cancelMutation.mutate(
-      { appointmentId: appointment.id, patientId: appointment.patientId },
+      {
+        appointmentId: appointment.id,
+        patientId: appointment.patientId,
+        doctorId: appointment.doctorId,
+      },
       {
         onSuccess: () => {
           toast.success('Appointment cancelled')
+          onCancelled?.()
           onOpenChange(false)
         },
-        onError: () => toast.error('Failed to cancel appointment'),
+        onError: (err) => toast.error(err.message || 'Failed to cancel appointment'),
       }
     )
   }
@@ -61,14 +75,29 @@ export function CancelDialog({ appointment, open, onOpenChange }: CancelDialogPr
             {appointment.doctorName && (
               <p className="font-medium text-gray-900">{appointment.doctorName}</p>
             )}
+            {appointment.specialty && (
+              <p className="text-xs text-gray-500">{appointment.specialty}</p>
+            )}
             <p className="text-gray-600">{formatDateTime(appointment.dateTime)}</p>
             <p className="text-gray-600">Type: {appointment.type}</p>
             <AppointmentStatusBadge status={appointment.status} />
           </div>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-6">
-            <p className="text-xs text-amber-800">
-              Cancellations made 24+ hours in advance receive a full refund.
+          <div
+            className={`flex items-start gap-2 rounded-lg px-3 py-2 mb-6 border ${
+              refundEligible
+                ? 'bg-emerald-50 border-emerald-200'
+                : 'bg-amber-50 border-amber-200'
+            }`}
+          >
+            <AlertTriangle
+              size={14}
+              className={`mt-0.5 flex-shrink-0 ${refundEligible ? 'text-emerald-600' : 'text-amber-600'}`}
+            />
+            <p className={`text-xs ${refundEligible ? 'text-emerald-800' : 'text-amber-800'}`}>
+              {refundEligible
+                ? 'This appointment is 24+ hours away — you are eligible for a full refund.'
+                : 'Cancellations made 24+ hours in advance receive a full refund. This appointment is within 24 hours, so a refund may not apply.'}
             </p>
           </div>
 
@@ -80,6 +109,7 @@ export function CancelDialog({ appointment, open, onOpenChange }: CancelDialogPr
               </button>
             </Dialog.Close>
             <button
+              type="button"
               onClick={handleConfirm}
               disabled={cancelMutation.isPending}
               className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 text-white text-sm font-medium

@@ -21,7 +21,10 @@ Production: Integrate MedASR for medical speech recognition
 from orchestrator.base import BaseAgent, AgentRequest, AgentResponse
 from typing import List, Dict, Optional, Any
 import base64
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class VoiceAgent(BaseAgent):
@@ -117,6 +120,8 @@ class VoiceAgent(BaseAgent):
             transcription=transcription_result["text"]
         )
 
+        stub_mode = transcription_result.get("stub_mode", True)
+
         # Build response data
         data = {
             "mode": self.modes[mode],
@@ -127,7 +132,14 @@ class VoiceAgent(BaseAgent):
             "words_detected": transcription_result.get("words", []),
             "medical_terms_identified": transcription_result.get("medical_terms", []),
             "alternative_transcriptions": transcription_result.get("alternatives", []),
+            "ai_response": transcription_result.get("ai_response"),
             "next_action": self._get_next_action(mode, transcription_result["text"]),
+            "model": transcription_result.get("model"),
+            "stub_mode": stub_mode,
+            "stub_note": (
+                "Speech-to-text model not loaded — demo transcript. "
+                "Non-authoritative; no real audio was transcribed."
+            ) if stub_mode else None,
             "disclaimer": self._get_voice_disclaimer()
         }
 
@@ -136,11 +148,120 @@ class VoiceAgent(BaseAgent):
             agent_name=self.name,
             data=data,
             confidence=transcription_result["confidence"],
-            reasoning=f"Speech transcribed using MedASR ({mode} mode, {language})",
+            reasoning=(
+                f"Speech transcribed using MedASR ({mode} mode, {language})"
+                if not stub_mode
+                else f"MedASR stub (model not loaded; {mode} mode)"
+            ),
             red_flags=[],
             requires_escalation=False,
             suggested_agents=suggested_agents
         )
+
+    async def _real_transcription(
+        self,
+        audio_path: Optional[str],
+        audio_data: Optional[str],
+        mode: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Real two-stage voice processing:
+          Stage 1 — MedASR/Whisper transcription (audio -> text).
+          Stage 2 — optional MedGemma response shaped by ``mode``.
+
+        Returns a transcription dict (stub_mode=False) on success, or None when
+        no ASR model is loaded / audio cannot be obtained, so the caller falls
+        back to the labelled stub.
+        """
+        try:
+            from services import medasr_service
+        except Exception:
+            return None
+        if not medasr_service.is_available():
+            return None
+
+        # Obtain raw audio bytes + a format hint.
+        audio_bytes = None
+        audio_format = "wav"
+        try:
+            if audio_data:
+                raw = audio_data
+                if isinstance(raw, str) and raw.lstrip().startswith("data:") and "," in raw[:64]:
+                    raw = raw.split(",", 1)[1]
+                audio_bytes = base64.b64decode(raw)
+            elif audio_path and Path(audio_path).exists():
+                audio_format = str(audio_path).rsplit(".", 1)[-1] if "." in str(audio_path) else "wav"
+                with open(audio_path, "rb") as fh:
+                    audio_bytes = fh.read()
+        except Exception as exc:
+            logger.error(f"Voice audio decode failed: {exc}")
+            return None
+        if not audio_bytes:
+            return None
+
+        svc = medasr_service.transcribe(audio_bytes, audio_format=audio_format)
+        if svc.get("stub_mode"):
+            return None
+
+        transcript = svc.get("text", "")
+
+        # Stage 2: optional MedGemma response (mode-specific).
+        ai_response = None
+        try:
+            from services import medgemma_service
+
+            if transcript and medgemma_service.is_available():
+                if mode == "symptom_reporting":
+                    prompt = (
+                        f'Patient voice symptom report: "{transcript}"\n\n'
+                        "List the symptoms, assess urgency "
+                        "(EMERGENCY/URGENT/ROUTINE/SELF_CARE), and give initial "
+                        "guidance. Decision support only."
+                    )
+                elif mode == "medical_dictation":
+                    prompt = (
+                        f'Physician dictation transcript: "{transcript}"\n\n'
+                        "Structure as a SOAP note (Subjective, Objective, "
+                        "Assessment, Plan)."
+                    )
+                elif mode == "voice_query":
+                    prompt = (
+                        f'Patient medical question via voice: "{transcript}"\n'
+                        "Answer clearly and safely. Decision support only."
+                    )
+                else:
+                    prompt = transcript
+                gem = medgemma_service.generate_text(prompt, max_new_tokens=400)
+                if not gem.get("stub_mode") and gem.get("text"):
+                    ai_response = gem["text"]
+        except Exception as exc:
+            logger.error(f"Voice MedGemma stage failed: {exc}")
+
+        return {
+            "text": transcript,
+            "confidence": 0.85 if transcript else 0.0,
+            "duration": 0,
+            "words": [],
+            "medical_terms": self._extract_medical_terms(transcript),
+            "alternatives": [],
+            "ai_response": ai_response,
+            "model": svc.get("model"),
+            "chunks": svc.get("chunks", []),
+            "stub_mode": False,
+        }
+
+    @staticmethod
+    def _extract_medical_terms(text: str) -> List[str]:
+        """Lightweight keyword spotting for surfaced medical terms."""
+        if not text:
+            return []
+        keywords = [
+            "cough", "fever", "pain", "chest pain", "shortness of breath",
+            "headache", "nausea", "dizziness", "blood pressure", "heart rate",
+            "medication", "dosage", "diabetes", "hypertension",
+        ]
+        lower = text.lower()
+        return [k for k in keywords if k in lower]
 
     async def _transcribe_audio(
         self,
@@ -189,7 +310,14 @@ class VoiceAgent(BaseAgent):
 
         See MEDASR_INTEGRATION_GUIDE.md for detailed instructions.
         """
-        # TODO: Replace with actual MedASR call in production
+        # Preferred path: real ASR via the central service (MedASR or Whisper),
+        # optionally followed by a MedGemma response. Falls back to the labelled
+        # stub below when no model is loaded or audio cannot be decoded.
+        real = await self._real_transcription(
+            audio_path=audio_path, audio_data=audio_data, mode=mode
+        )
+        if real is not None:
+            return real
 
         # STUB: Return mock transcriptions based on mode
         if mode == "symptom_reporting":
@@ -208,7 +336,8 @@ class VoiceAgent(BaseAgent):
                 "alternatives": [
                     "I have been having a persistent cough and fever for the past 5 days",
                     "I've had a persistent cough and fever for about 5 days"
-                ]
+                ],
+                "stub_mode": True
             }
 
         elif mode == "medical_dictation":
@@ -222,7 +351,8 @@ class VoiceAgent(BaseAgent):
                     "blood pressure", "oxygen saturation", "EKG", "ST elevations",
                     "STEMI", "PCI", "cath lab"
                 ],
-                "alternatives": []
+                "alternatives": [],
+                "stub_mode": True
             }
 
         elif mode == "voice_query":
@@ -239,7 +369,8 @@ class VoiceAgent(BaseAgent):
                 "alternatives": [
                     "What are the side effects of Lisinopril",
                     "What are the side affects of lisinopril"
-                ]
+                ],
+                "stub_mode": True
             }
 
         else:  # general
@@ -249,7 +380,8 @@ class VoiceAgent(BaseAgent):
                 "duration": 4.2,
                 "words": [],
                 "medical_terms": [],
-                "alternatives": []
+                "alternatives": [],
+                "stub_mode": True
             }
 
     def _determine_routing(self, mode: str, transcription: str) -> List[str]:

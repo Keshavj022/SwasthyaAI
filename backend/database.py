@@ -1,6 +1,8 @@
 """
 Database configuration for offline-first SQLite storage.
-All patient data is stored locally and encrypted at rest.
+All patient data is stored locally on disk. NOTE: encryption-at-rest
+(e.g. SQLCipher) is a roadmap item and is NOT yet implemented — do not
+claim the database is encrypted until it is.
 """
 
 from sqlalchemy import create_engine
@@ -14,11 +16,13 @@ os.makedirs(DATABASE_DIR, exist_ok=True)
 
 DATABASE_URL = f"sqlite:///{os.path.join(DATABASE_DIR, 'hospital.db')}"
 
-# SQLAlchemy engine
+# SQLAlchemy engine.
+# echo defaults OFF: echoing logs every SQL statement (incl. PHI) to stdout.
+# Set SQL_ECHO=1 in the environment only for local debugging.
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False},  # Required for SQLite
-    echo=True,  # Log SQL queries (disable in production)
+    echo=os.getenv("SQL_ECHO", "0") == "1",
 )
 
 # Session factory

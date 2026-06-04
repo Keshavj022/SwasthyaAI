@@ -3,13 +3,13 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ChangeEvent } from 'react'
 import { Send, Paperclip, X } from 'lucide-react'
 
-interface SelectedFile {
+export interface SelectedFile {
   file: File
   preview: string | null   // data URL for images, null for PDFs
 }
 
 interface ChatInputProps {
-  onSend: (text: string, file?: File) => void
+  onSend: (text: string, file?: SelectedFile | null) => void
   disabled?: boolean
   initialValue?: string
   onInitialValueConsumed?: () => void
@@ -52,8 +52,9 @@ export function ChatInput({
 
   function handleSend() {
     const trimmed = text.trim()
-    if (!trimmed || disabled) return
-    onSend(trimmed, selectedFile?.file)
+    // Allow sending an attachment with no text (e.g. "analyze this image").
+    if ((!trimmed && !selectedFile) || disabled) return
+    onSend(trimmed, selectedFile)
     setText('')
     setSelectedFile(null)
   }
@@ -111,7 +112,7 @@ export function ChatInput({
           type="button"
           onClick={() => fileInputRef.current?.click()}
           className="flex-shrink-0 p-2 text-gray-400 hover:text-teal-600 transition-colors rounded-lg hover:bg-gray-100"
-          title="Attach image or PDF (image analysis coming soon)"
+          title="Attach an image for AI analysis"
           disabled={disabled}
         >
           <Paperclip size={18} />
@@ -155,7 +156,7 @@ export function ChatInput({
         <button
           type="button"
           onClick={handleSend}
-          disabled={!text.trim() || disabled}
+          disabled={(!text.trim() && !selectedFile) || disabled}
           className="flex-shrink-0 p-2.5 rounded-xl bg-teal-600 text-white
                      hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed
                      transition-colors shadow-sm"

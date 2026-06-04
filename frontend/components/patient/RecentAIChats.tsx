@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, ChevronRight, Bot } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import EmptyState from '@/components/ui/EmptyState'
 import { useAuth } from '@/hooks/useAuth'
 import type { Message } from '@/types'
@@ -22,6 +23,7 @@ export default function RecentAIChats() {
   const router = useRouter()
   const { user } = useAuth()
   const [chats, setChats] = useState<Message[]>([])
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -33,10 +35,23 @@ export default function RecentAIChats() {
       }
     } catch {
       // ignore parse errors
+    } finally {
+      setLoaded(true)
     }
   }, [user?.id])
 
   if (!user) return null
+
+  if (!loaded) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-3">
+        <Skeleton className="h-5 w-40" />
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-14 w-full rounded-xl" />
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

@@ -31,6 +31,14 @@ class MedASRInference(BaseInference):
     # Supported audio formats
     SUPPORTED_FORMATS = [".wav", ".mp3", ".flac", ".m4a", ".ogg"]
 
+    def service_available(self) -> bool:
+        """Real ASR (MedASR/Whisper) is served via the central service layer."""
+        try:
+            from services import medasr_service
+            return medasr_service.is_available()
+        except Exception:
+            return False
+
     def _load_model_weights(self):
         """Load MedASR model weights (lasr_ctc architecture)"""
         try:
@@ -102,64 +110,38 @@ class MedASRInference(BaseInference):
             return_timestamps: Whether to return word-level timestamps
 
         Returns:
-            Dict with transcription, confidence, medical terms detected
+            Dict with transcription, confidence, medical terms (carries stub_mode)
         """
-        if not self._load_model():
-            return self._generate_stub_response(
-                mode=mode,
-                audio_file=str(audio_file)
-            )
-
+        # Route through the central ASR service (handles chunking + offline
+        # pipeline). Returns a labelled stub when no model is loaded.
         try:
-            # Load audio
-            import librosa
-            audio_data, sample_rate = librosa.load(audio_file, sr=16000)
+            from services import medasr_service
 
-            # Process audio
-            inputs = self.processor(
-                audio_data,
-                sampling_rate=sample_rate,
-                return_tensors="pt"
-            ).to(self.device)
+            with open(audio_file, "rb") as fh:
+                audio_bytes = fh.read()
+            audio_format = str(audio_file).rsplit(".", 1)[-1] if "." in str(audio_file) else "wav"
 
-            # Generate transcription
-            import torch
-            with torch.no_grad():
-                predicted_ids = self.model.generate(
-                    inputs.input_features,
-                    return_timestamps=return_timestamps,
-                    language=language
-                )
-
-            # Decode transcription
-            transcription = self.processor.batch_decode(
-                predicted_ids,
-                skip_special_tokens=True
-            )[0]
-
-            # Extract medical terminology
-            medical_terms = self._extract_medical_terms(transcription)
-
-            # Calculate confidence (approximation)
-            confidence = self._estimate_confidence(predicted_ids)
-
-            return {
-                "transcription": transcription,
-                "mode": mode,
-                "language": language,
-                "confidence": confidence,
-                "medical_terms_detected": medical_terms,
-                "audio_duration_seconds": len(audio_data) / sample_rate,
-                "disclaimer": "Transcription should be reviewed by qualified medical personnel.",
-                "stub_mode": False
-            }
-
+            svc = medasr_service.transcribe(audio_bytes, audio_format=audio_format)
+            if not svc.get("stub_mode"):
+                transcription = svc.get("text", "")
+                return {
+                    "transcription": transcription,
+                    "mode": mode,
+                    "language": svc.get("language", language),
+                    "confidence": 0.85 if transcription else 0.0,
+                    "medical_terms_detected": self._extract_medical_terms(transcription),
+                    "chunks": svc.get("chunks", []),
+                    "model": svc.get("model"),
+                    "disclaimer": svc.get("disclaimer", "Transcription should be reviewed by qualified medical personnel."),
+                    "stub_mode": False,
+                }
         except Exception as e:
-            logger.error(f"MedASR transcription failed: {e}")
-            return self._generate_stub_response(
-                mode=mode,
-                audio_file=str(audio_file)
-            )
+            logger.error(f"ASR service transcription failed: {e}")
+
+        return self._generate_stub_response(
+            mode=mode,
+            audio_file=str(audio_file),
+        )
 
     async def transcribe_with_speaker_diarization(
         self,

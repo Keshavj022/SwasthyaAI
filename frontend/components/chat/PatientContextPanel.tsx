@@ -9,12 +9,16 @@ interface PatientContextPanelProps {
   patientId: string
 }
 
-function formatAge(dateOfBirth: string): string {
-  try {
-    return `${differenceInYears(new Date(), parseISO(dateOfBirth))} yrs`
-  } catch {
-    return 'Unknown'
+function computeAge(patient: Patient): string {
+  if (typeof patient.age === 'number') return `${patient.age} yrs`
+  if (patient.dateOfBirth) {
+    try {
+      return `${differenceInYears(new Date(), parseISO(patient.dateOfBirth))} yrs`
+    } catch {
+      /* fall through */
+    }
   }
+  return 'Unknown'
 }
 
 export function PatientContextPanel({ patientId }: PatientContextPanelProps) {
@@ -49,6 +53,8 @@ export function PatientContextPanel({ patientId }: PatientContextPanelProps) {
   }
 
   const latestCheckIn = checkIns?.[0]
+  const conditions = patient.activeConditions ?? []
+  const medications = patient.currentMedications ?? []
 
   return (
     <aside className="w-52 border-l border-gray-200 bg-white flex flex-col overflow-y-auto">
@@ -58,18 +64,32 @@ export function PatientContextPanel({ patientId }: PatientContextPanelProps) {
       </div>
 
       <div className="px-4 py-3 flex flex-col gap-3 text-xs">
-        {/* Patient ID */}
-        <div>
-          <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">ID</p>
-          <p className="text-gray-700 font-mono text-[10px] truncate">{patient.id}</p>
-        </div>
-
-        {patient.dateOfBirth && (
+        {/* Name */}
+        {patient.name ? (
           <div>
-            <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">Age</p>
-            <p className="text-gray-700">{formatAge(patient.dateOfBirth)}</p>
+            <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">Name</p>
+            <p className="text-gray-900 font-medium">{patient.name}</p>
+          </div>
+        ) : (
+          <div>
+            <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">ID</p>
+            <p className="text-gray-700 font-mono text-[10px] truncate">{patient.id}</p>
           </div>
         )}
+
+        {/* Age + gender */}
+        <div className="flex gap-4">
+          <div>
+            <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">Age</p>
+            <p className="text-gray-700">{computeAge(patient)}</p>
+          </div>
+          {patient.gender && (
+            <div>
+              <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">Sex</p>
+              <p className="text-gray-700 capitalize">{patient.gender}</p>
+            </div>
+          )}
+        </div>
 
         {patient.bloodGroup && (
           <div>
@@ -77,6 +97,35 @@ export function PatientContextPanel({ patientId }: PatientContextPanelProps) {
             <span className="inline-flex items-center px-2 py-0.5 rounded bg-red-50 text-red-700 font-semibold">
               {patient.bloodGroup}
             </span>
+          </div>
+        )}
+
+        {/* Active conditions */}
+        {conditions.length > 0 && (
+          <div>
+            <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">Active Conditions</p>
+            <div className="flex flex-wrap gap-1">
+              {conditions.map((c) => (
+                <span key={c} className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px]">
+                  {c}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Current medications */}
+        {medications.length > 0 && (
+          <div>
+            <p className="text-gray-400 uppercase tracking-wide font-medium mb-1">Current Medications</p>
+            <ul className="space-y-0.5 text-gray-700">
+              {medications.map((m) => (
+                <li key={m} className="flex items-start gap-1">
+                  <span className="text-blue-500 mt-px">•</span>
+                  <span className="break-words">{m}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

@@ -106,15 +106,29 @@ class DiagnosticSupportAgent(BaseAgent):
             patient_context=patient_context
         )
 
-        # Call MedGemma model (stub for now)
-        medgemma_response = await self._call_medgemma(prompt)
-
-        # Parse MedGemma response into structured format
-        parsed_data = self._parse_differential_response(medgemma_response)
+        # Prefer the real MedGemma service (structured differential). Falls back
+        # to the labelled stub parser when the model is not loaded.
+        parsed_data, stub_mode = await self._real_differential(
+            symptoms=symptoms,
+            duration=duration,
+            severity=severity,
+            vital_signs=vital_signs,
+            patient_context=patient_context,
+        )
+        if parsed_data is None:
+            medgemma_response = await self._call_medgemma(prompt)
+            parsed_data = self._parse_differential_response(medgemma_response)
+            stub_mode = True
 
         # Add detected symptoms and emergency flags
         parsed_data["symptoms_analyzed"] = symptoms
         parsed_data["emergency_detected"] = emergency_detected
+        parsed_data["stub_mode"] = stub_mode
+        if stub_mode:
+            parsed_data["stub_note"] = (
+                "AI model not loaded — demo differential. Non-authoritative; do "
+                "not use for clinical decisions."
+            )
 
         # Combine red flags from parsing and emergency detection
         all_red_flags = list(set(parsed_data.get("red_flags", []) + emergency_flags))
@@ -158,6 +172,80 @@ class DiagnosticSupportAgent(BaseAgent):
             requires_escalation=requires_escalation,
             suggested_agents=suggested_agents
         )
+
+    async def _real_differential(
+        self,
+        symptoms: List[str],
+        duration: Optional[str],
+        severity: Optional[str],
+        vital_signs: Optional[Dict],
+        patient_context: Optional[Dict],
+    ):
+        """
+        Run a real MedGemma structured differential.
+
+        Returns (parsed_data, stub_mode):
+          - (dict, False) when the model produced parseable structured output.
+          - (None, True)  when the model is unavailable / unparseable so the
+            caller falls back to the labelled stub.
+        """
+        try:
+            from services import medgemma_service
+
+            if not medgemma_service.is_available():
+                return None, True
+
+            prompt = (
+                f"Clinical symptoms: {', '.join(symptoms)}\n"
+                f"Duration: {duration or 'not provided'}\n"
+                f"Severity: {severity or 'not provided'}\n"
+                f"Vital signs: {vital_signs or 'not provided'}\n"
+                f"Patient context: {patient_context or 'not provided'}\n\n"
+                "Provide a ranked differential diagnosis with confidence scores, "
+                "red flags, and recommended workup. Decision support only."
+            )
+            schema = {
+                "differential_diagnoses": [
+                    {
+                        "condition": "...",
+                        "confidence": 0.0,
+                        "supporting_features": ["..."],
+                        "contradicting_features": ["..."],
+                        "missing_information": ["..."],
+                    }
+                ],
+                "red_flags": ["..."],
+                "recommended_workup": ["..."],
+                "clinical_correlation_needed": ["..."],
+            }
+            svc = medgemma_service.generate_structured(prompt, schema)
+            if svc.get("stub_mode") or not svc.get("data"):
+                return None, True
+
+            data = svc["data"]
+            # Normalise into the structure the caller / parser expects.
+            diffs = data.get("differential_diagnoses", []) or []
+            for i, d in enumerate(diffs):
+                d.setdefault("rank", i + 1)
+            data["differential_diagnoses"] = diffs
+            data.setdefault("red_flags", [])
+            data.setdefault("recommended_workup", [])
+            data.setdefault("clinical_correlation_needed", [])
+            data["total_diagnoses_considered"] = len(diffs)
+            data["most_likely_diagnosis"] = (
+                diffs[0].get("condition") if diffs else "Unknown - insufficient information"
+            )
+            data["disclaimer"] = svc.get(
+                "disclaimer",
+                "This differential diagnosis is for clinical decision support only. "
+                "NOT a definitive diagnosis.",
+            )
+            data["model"] = svc.get("model")
+            return data, False
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(f"MedGemma differential failed: {exc}")
+            return None, True
 
     async def _call_medgemma(self, prompt: str) -> str:
         """

@@ -65,3 +65,37 @@ async def health_check(db: Session = Depends(get_db)):
 async def ping():
     """Simple ping endpoint for quick connectivity tests."""
     return {"message": "pong", "timestamp": datetime.utcnow().isoformat()}
+
+
+@router.get("/ai-status")
+async def ai_status():
+    """
+    Status of the local medical AI models (MedGemma / MedSigLIP / MedASR).
+
+    Returns:
+        {
+          "models": [{name, enabled, loaded, stub, device, repoId}, ...],
+          "anyLoaded": bool,
+          "timestamp": str
+        }
+
+    Degrades gracefully: if the model layer cannot be imported (e.g. torch
+    missing), reports all models as stub rather than erroring.
+    """
+    try:
+        from services.model_loader import model_status
+
+        models = model_status()
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "models": [],
+            "anyLoaded": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    return {
+        "models": models,
+        "anyLoaded": any(m.get("loaded") for m in models),
+        "timestamp": datetime.utcnow().isoformat(),
+    }

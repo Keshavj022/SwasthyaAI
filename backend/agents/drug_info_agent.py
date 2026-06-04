@@ -87,6 +87,60 @@ class DrugInfoAgent(BaseAgent):
             "liver_disease": ["acetaminophen_high_dose", "statins"]
         }
 
+    def _known_drugs(self) -> set:
+        """
+        Lowercase set of drugs the curated rule-based knowledge covers (either
+        a full info entry OR an interaction-DB entry). Used to decide when we can
+        make a confident statement vs. when we must say 'unable to verify'.
+        """
+        known = set(self.drug_interactions.keys())
+        # Drugs named in interaction lists are also "known" to our rules.
+        for entry in self.drug_interactions.values():
+            known.update(entry.get("major_interactions", []))
+            known.update(entry.get("moderate_interactions", []))
+        # Cross-reactivity table + _get_drug_info's hardcoded entries:
+        for base, reactives in self.allergy_cross_reactivity.items():
+            known.add(base)
+            known.update(reactives)
+        known.update({"lisinopril", "metformin"})
+        return {d.lower() for d in known}
+
+    def _drug_covered(self, name: str) -> bool:
+        """True if the curated knowledge covers this drug name (substring-safe)."""
+        name = (name or "").lower().strip()
+        if not name:
+            return False
+        known = self._known_drugs()
+        if name in known:
+            return True
+        return any(k in name or name in k for k in known)
+
+    def _medgemma_explain(self, medication: str, patient_context):
+        """
+        Try MedGemma for a free-text drug explanation.
+
+        Returns (text, stub_mode). text is None when unavailable.
+        """
+        try:
+            from services import medgemma_service
+
+            if not medgemma_service.is_available():
+                return None, True
+            prompt = (
+                f"Explain the medication: {medication}\n"
+                f"Patient: {patient_context or 'general adult'}\n\n"
+                "Provide: indication, simplified mechanism of action, common side "
+                "effects, serious warnings/contraindications, general (informational, "
+                "non-prescribing) dosage range, and key interactions. Decision "
+                "support only — do not prescribe."
+            )
+            result = medgemma_service.generate_text(prompt, max_new_tokens=600)
+            if result.get("stub_mode"):
+                return None, True
+            return result.get("text"), False
+        except Exception:
+            return None, True
+
     async def process(self, request: AgentRequest) -> AgentResponse:
         """
         Route drug information request to appropriate handler.
@@ -138,8 +192,60 @@ class DrugInfoAgent(BaseAgent):
 
         medication_lower = medication.lower()
 
-        # Check if in our database (stub)
-        drug_info = self._get_drug_info(medication_lower)
+        # Is the drug covered by our curated local database?
+        in_local_db = medication_lower in self._known_drugs()
+
+        if in_local_db:
+            drug_info = self._get_drug_info(medication_lower)
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "medication_explanation",
+                    "medication_name": medication,
+                    "source": "local_database",
+                    "generic_name": drug_info.get("generic_name", ""),
+                    "brand_names": drug_info.get("brand_names", []),
+                    "drug_class": drug_info.get("drug_class", ""),
+                    "mechanism_of_action": drug_info.get("mechanism", ""),
+                    "common_uses": drug_info.get("uses", []),
+                    "typical_dosage_range": drug_info.get("dosage_range", ""),
+                    "administration": drug_info.get("administration", ""),
+                    "common_side_effects": drug_info.get("side_effects", []),
+                    "serious_side_effects": drug_info.get("serious_side_effects", []),
+                    "contraindications": drug_info.get("contraindications", []),
+                    "pregnancy_category": drug_info.get("pregnancy_category", ""),
+                    "storage": drug_info.get("storage", ""),
+                    # Curated, rule-based entry — not AI-generated, so stub_mode False.
+                    "stub_mode": False,
+                    "disclaimer": self._get_medication_disclaimer()
+                },
+                confidence=0.85,
+                reasoning=f"Medication information from local database for {medication}",
+                red_flags=[],
+                requires_escalation=False
+            )
+
+        # Not in the curated DB — try MedGemma; otherwise return an explicit
+        # "unable to verify" rather than fabricating confident drug facts.
+        gem_text, gem_stub = self._medgemma_explain(medication, request.context.get("patient_context"))
+        if gem_text and not gem_stub:
+            return AgentResponse(
+                success=True,
+                agent_name=self.name,
+                data={
+                    "task": "medication_explanation",
+                    "medication_name": medication,
+                    "source": "MedGemma",
+                    "explanation": gem_text,
+                    "stub_mode": False,
+                    "disclaimer": self._get_medication_disclaimer()
+                },
+                confidence=0.70,
+                reasoning=f"Medication information generated by MedGemma for {medication}",
+                red_flags=[],
+                requires_escalation=False
+            )
 
         return AgentResponse(
             success=True,
@@ -147,22 +253,22 @@ class DrugInfoAgent(BaseAgent):
             data={
                 "task": "medication_explanation",
                 "medication_name": medication,
-                "generic_name": drug_info.get("generic_name", ""),
-                "brand_names": drug_info.get("brand_names", []),
-                "drug_class": drug_info.get("drug_class", ""),
-                "mechanism_of_action": drug_info.get("mechanism", ""),
-                "common_uses": drug_info.get("uses", []),
-                "typical_dosage_range": drug_info.get("dosage_range", ""),
-                "administration": drug_info.get("administration", ""),
-                "common_side_effects": drug_info.get("side_effects", []),
-                "serious_side_effects": drug_info.get("serious_side_effects", []),
-                "contraindications": drug_info.get("contraindications", []),
-                "pregnancy_category": drug_info.get("pregnancy_category", ""),
-                "storage": drug_info.get("storage", ""),
+                "source": "unavailable",
+                "message": (
+                    f"Unable to verify information for '{medication}'. It is not in "
+                    "the local drug database and the medical AI model is not loaded. "
+                    "Please consult a pharmacist or your prescriber for accurate "
+                    "medication information."
+                ),
+                "stub_mode": True,
+                "stub_note": (
+                    "AI model not loaded and drug not in local database — no "
+                    "verified information available."
+                ),
                 "disclaimer": self._get_medication_disclaimer()
             },
-            confidence=0.85,
-            reasoning=f"Medication information provided for {medication}",
+            confidence=0.30,
+            reasoning=f"No verified information available for {medication}",
             red_flags=[],
             requires_escalation=False
         )
@@ -184,12 +290,12 @@ class DrugInfoAgent(BaseAgent):
         if not medications and not new_medication:
             return self._error_response("'medications' or 'new_medication' required")
 
-        # If checking new medication against patient's current meds
-        if new_medication and patient_id:
-            # In production, retrieve from Health Memory Agent
-            # For now, use stub current medications
+        # If checking a new medication against the patient's current meds, merge
+        # them (current_medications may come from context or, in production, the
+        # Health Memory Agent via patient_id).
+        if new_medication:
             current_meds = request.context.get("current_medications", [])
-            medications = current_meds + [new_medication]
+            medications = list(current_meds) + [new_medication]
 
         # Check all pairs for interactions
         interactions_found = []
@@ -213,8 +319,26 @@ class DrugInfoAgent(BaseAgent):
             if interaction["severity"] == "major"
         ]
 
-        # Calculate confidence
-        confidence = 0.90 if len(medications) <= 5 else 0.75
+        # Coverage: how many of the supplied drugs are in our curated DB? If some
+        # are NOT covered, a "no interactions found" result is UNVERIFIED — we
+        # must not present absence-of-evidence as evidence-of-safety.
+        uncovered = [m for m in medications if not self._drug_covered(m)]
+        fully_covered = len(uncovered) == 0
+        # stub_mode True when results cannot be trusted (uncovered drugs +
+        # nothing flagged). When an interaction IS flagged it stands regardless.
+        unverified = bool(uncovered) and not interactions_found
+
+        if unverified:
+            recommendation = (
+                "Unable to verify interactions: "
+                f"{', '.join(uncovered)} not in the local database. This is NOT a "
+                "clearance — consult a pharmacist or healthcare provider before "
+                "combining these medications."
+            )
+        else:
+            recommendation = self._get_interaction_recommendation(severity_counts)
+
+        confidence = (0.90 if len(medications) <= 5 else 0.75) if fully_covered else 0.40
 
         return AgentResponse(
             success=True,
@@ -222,10 +346,17 @@ class DrugInfoAgent(BaseAgent):
             data={
                 "task": "drug_interaction_check",
                 "medications_checked": medications,
+                "uncovered_medications": uncovered,
                 "total_interactions_found": len(interactions_found),
                 "severity_breakdown": severity_counts,
                 "interactions": interactions_found,
-                "recommendation": self._get_interaction_recommendation(severity_counts),
+                "verified": fully_covered,
+                "stub_mode": unverified,
+                "stub_note": (
+                    "Some drugs are outside the local database — interaction "
+                    "results are incomplete and must be confirmed by a pharmacist."
+                ) if unverified else None,
+                "recommendation": recommendation,
                 "disclaimer": "Drug interaction check is not comprehensive. Always consult your pharmacist or healthcare provider."
             },
             confidence=confidence,
@@ -314,6 +445,7 @@ class DrugInfoAgent(BaseAgent):
                 "cross_reactivity_warnings": len(cross_reactivity_warnings),
                 "all_warnings": all_warnings,
                 "recommendation": self._get_allergy_recommendation(all_warnings),
+                "stub_mode": False,  # deterministic rule-based check, not AI
                 "disclaimer": "Allergy check based on known allergies only. Always verify with patient before administration."
             },
             confidence=0.95 if patient_allergies else 0.60,
@@ -365,6 +497,7 @@ class DrugInfoAgent(BaseAgent):
                 "food_interactions": dosage_info.get("food_interactions", ""),
                 "missed_dose_guidance": dosage_info.get("missed_dose", ""),
                 "warnings": warnings,
+                "stub_mode": False,  # deterministic, intentionally generic guidance
                 "disclaimer": "Dosage information is general guidance only. Actual dosing must be determined by prescribing healthcare provider based on individual patient factors."
             },
             confidence=0.80,
@@ -439,9 +572,29 @@ class DrugInfoAgent(BaseAgent):
             safety_issues.extend(contraindications)
             red_flags.extend([c["message"] for c in contraindications])
 
-        # Overall safety determination
-        is_safe = len(safety_issues) == 0
-        severity_level = "UNSAFE" if not is_safe else "SAFE"
+        # Coverage check: if the new drug (or any current med) is outside the
+        # curated DB, we CANNOT assert SAFE — absence of detected issues is not
+        # a clearance. Downgrade to UNABLE_TO_VERIFY and flag stub_mode.
+        all_meds = [new_medication] + list(current_medications)
+        uncovered = [m for m in all_meds if not self._drug_covered(m)]
+        unverified = bool(uncovered) and len(safety_issues) == 0
+
+        if safety_issues:
+            severity_level = "UNSAFE"
+            is_safe = False
+            recommendation = self._get_comprehensive_recommendation(False, safety_issues)
+        elif unverified:
+            severity_level = "UNABLE_TO_VERIFY"
+            is_safe = None
+            recommendation = (
+                "Unable to verify safety: "
+                f"{', '.join(uncovered)} not in the local database. This is NOT a "
+                "safety clearance. Consult a pharmacist before administering."
+            )
+        else:
+            severity_level = "SAFE"
+            is_safe = True
+            recommendation = self._get_comprehensive_recommendation(True, safety_issues)
 
         return AgentResponse(
             success=True,
@@ -451,9 +604,15 @@ class DrugInfoAgent(BaseAgent):
                 "new_medication": new_medication,
                 "overall_safety": severity_level,
                 "is_safe": is_safe,
+                "uncovered_medications": uncovered,
                 "total_safety_issues": len(safety_issues),
                 "safety_issues": safety_issues,
-                "recommendation": self._get_comprehensive_recommendation(is_safe, safety_issues),
+                "stub_mode": unverified,
+                "stub_note": (
+                    "One or more drugs are outside the local database — this is "
+                    "not a verified safety clearance."
+                ) if unverified else None,
+                "recommendation": recommendation,
                 "next_steps": [
                     "Consult pharmacist before administering medication",
                     "Review patient chart for complete medication history",
@@ -462,10 +621,10 @@ class DrugInfoAgent(BaseAgent):
                 ],
                 "disclaimer": "This safety check is based on available information only. Complete medication reconciliation and clinical judgment by healthcare provider is required."
             },
-            confidence=0.85 if (patient_allergies and current_medications) else 0.65,
+            confidence=0.85 if (patient_allergies and current_medications and not uncovered) else 0.55,
             reasoning=f"Comprehensive safety check for {new_medication}",
             red_flags=red_flags,
-            requires_escalation=not is_safe,
+            requires_escalation=(severity_level == "UNSAFE"),
             suggested_agents=["health_memory"] if patient_id else []
         )
 

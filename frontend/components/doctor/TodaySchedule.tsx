@@ -4,8 +4,13 @@ import { useMemo } from 'react'
 import { Clock } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import EmptyState from '@/components/ui/EmptyState'
-import type { Appointment } from '@/types'
+import { usePatientLookup } from '@/hooks/usePatients'
+import type { Appointment, Patient } from '@/types'
 import { isToday } from '@/lib/utils'
+
+function patientLabel(appt: Appointment, patient?: Patient): string {
+  return appt.patientName || patient?.name || `Patient ${appt.patientId.slice(0, 6)}`
+}
 
 const HOUR_START = 9
 const HOUR_END = 18
@@ -39,6 +44,7 @@ interface Props {
 }
 
 export default function TodaySchedule({ appointments, isLoading, onSelect }: Props) {
+  const { resolve } = usePatientLookup()
   const todayAppts = useMemo(
     () =>
       appointments
@@ -109,24 +115,27 @@ export default function TodaySchedule({ appointments, isLoading, onSelect }: Pro
 
           {/* List below timeline */}
           <div className="mt-3 space-y-1.5">
-            {todayAppts.map((appt) => (
-              <button
-                key={appt.id}
-                onClick={() => onSelect(appt)}
-                className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors text-left"
-              >
-                <span className="w-2 h-2 rounded-full shrink-0 bg-teal-400" />
-                <span className="text-xs text-gray-500 shrink-0 w-14">
-                  {new Date(appt.dateTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                <span className="text-sm font-medium text-gray-900 flex-1 truncate">
-                  {appt.patientId}
-                </span>
-                <span className={`ml-auto text-xs px-2 py-0.5 rounded-full capitalize ${getColor(appt.type)}`}>
-                  {appt.type}
-                </span>
-              </button>
-            ))}
+            {todayAppts.map((appt) => {
+              const label = patientLabel(appt, resolve(appt.patientId))
+              return (
+                <button
+                  key={appt.id}
+                  onClick={() => onSelect(appt)}
+                  className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors text-left"
+                >
+                  <span className="w-2 h-2 rounded-full shrink-0 bg-teal-400" />
+                  <span className="text-xs text-gray-500 shrink-0 w-14">
+                    {new Date(appt.dateTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span className="text-sm font-medium text-gray-900 flex-1 truncate">
+                    {label}
+                  </span>
+                  <span className={`ml-auto text-xs px-2 py-0.5 rounded-full capitalize ${getColor(appt.type)}`}>
+                    {appt.type}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}

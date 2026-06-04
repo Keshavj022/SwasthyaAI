@@ -27,14 +27,18 @@ from schemas.orchestrator import (
 )
 from orchestrator.base import AgentRequest
 from orchestrator.orchestrator import orchestrator
+from services.auth_service import get_current_user
+from models.user import User
 
 router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
 
 @router.post("/query", response_model=QueryResponse)
+@router.post("/ask", response_model=QueryResponse)
 async def query_orchestrator(
     request: QueryRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Main orchestrator endpoint - processes user queries through agent system.
@@ -63,12 +67,27 @@ async def query_orchestrator(
         }
         ```
     """
-    # Convert to AgentRequest
+    # SECURITY: always derive the actor from the authenticated token — never
+    # trust a client-supplied user_id (prevents audit-trail spoofing).
+    user_id = str(current_user.id)
+
+    # Merge auth-derived identity + any voice payload into the agent context.
+    context = dict(request.context or {})
+    context.setdefault("user_type", current_user.role)
+    if request.audio_base64:
+        context["audio_data"] = request.audio_base64
+        if request.audio_format:
+            context["audio_format"] = request.audio_format
+        context["mode"] = request.voice_mode or context.get("mode") or "general"
+
+    # Route audio-only requests to the voice agent with a sensible default message.
+    message = request.message or ("Transcribe this audio" if request.audio_base64 else "")
+
     agent_request = AgentRequest(
-        user_id=request.user_id,
-        message=request.message,
+        user_id=user_id,
+        message=message,
         attachments=request.attachments or [],
-        context=request.context or {}
+        context=context,
     )
 
     # Process through orchestrator

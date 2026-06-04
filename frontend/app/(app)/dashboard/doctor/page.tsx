@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Calendar, FileText, AlertTriangle, Brain } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import StatCard from '@/components/ui/StatCard'
@@ -13,8 +13,13 @@ import RecentConsultations from '@/components/doctor/RecentConsultations'
 import PatientSheet from '@/components/doctor/PatientSheet'
 import { useAuth } from '@/hooks/useAuth'
 import { useDoctorAppointments } from '@/hooks/useAppointments'
+import { useAuditLogs } from '@/hooks/useAudit'
 import type { Appointment } from '@/types'
 import { isToday } from '@/lib/utils'
+
+interface AuditRow {
+  timestamp?: string
+}
 
 function formatDate(): string {
   return new Date().toLocaleDateString('en-IN', {
@@ -30,13 +35,22 @@ function DoctorDashboardInner() {
   const doctorId = user?.id ?? ''
 
   const { data: appointments = [], isLoading } = useDoctorAppointments(doctorId)
+  // Audit logs (last 24h by default) — used for the "AI Queries Today" card.
+  const { data: auditData, isLoading: auditLoading } = useAuditLogs({ limit: 200 })
 
   const [selectedAppt, setSelectedAppt] = useState<Appointment | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [criticalCount, setCriticalCount] = useState(0)
 
   const todayCount = appointments.filter(
     (a) => a.status !== 'cancelled' && isToday(a.dateTime)
   ).length
+
+  // AI queries logged today (audit log is the source of truth).
+  const aiQueriesToday = useMemo(() => {
+    const rows = (auditData?.logs ?? []) as AuditRow[]
+    return rows.filter((r) => r.timestamp && isToday(r.timestamp)).length
+  }, [auditData])
 
   const handleSelectAppt = (appt: Appointment) => {
     setSelectedAppt(appt)
@@ -45,81 +59,75 @@ function DoctorDashboardInner() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6">
-    <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">
-          Dr. {user?.name ?? 'Doctor'}
-        </h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          Physician · {formatDate()}
-        </p>
-      </div>
+      <div className="space-y-6 max-w-7xl mx-auto">
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dr. {user?.name ?? 'Doctor'}</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Physician · {formatDate()}</p>
+        </div>
 
-      {/* Critical alerts */}
-      <CriticalAlerts />
+        {/* Critical alerts (reports its count up for the stat card) */}
+        <CriticalAlerts onCountChange={setCriticalCount} />
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Today's Patients"
-          value={todayCount}
-          subtitle="Scheduled"
-          icon={<Calendar className="w-5 h-5" />}
-          color="teal"
+        {/* Stat cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            title="Today's Patients"
+            value={todayCount}
+            subtitle="Scheduled"
+            icon={<Calendar className="w-5 h-5" />}
+            color="teal"
+          />
+          {/* Pending reports has no backend source yet — labelled as sample. */}
+          <StatCard
+            title="Pending Reports"
+            value={2}
+            subtitle="Sample · awaiting review"
+            icon={<FileText className="w-5 h-5" />}
+            color="amber"
+          />
+          <StatCard
+            title="Critical Alerts"
+            value={criticalCount}
+            subtitle="Last 24 hours"
+            icon={<AlertTriangle className="w-5 h-5" />}
+            color="red"
+          />
+          <StatCard
+            title="AI Queries"
+            value={auditLoading ? '—' : aiQueriesToday}
+            subtitle="Today"
+            icon={<Brain className="w-5 h-5" />}
+            color="blue"
+          />
+        </div>
+
+        {/* Today's schedule */}
+        <TodaySchedule
+          appointments={appointments}
+          isLoading={isLoading}
+          onSelect={handleSelectAppt}
         />
-        {/* TODO: fetch real count */}
-        <StatCard
-          title="Pending Reports"
-          value={2}
-          subtitle="Awaiting review"
-          icon={<FileText className="w-5 h-5" />}
-          color="amber"
-        />
-        {/* TODO: fetch real count */}
-        <StatCard
-          title="Critical Alerts"
-          value={0}
-          subtitle="Last 24 hours"
-          icon={<AlertTriangle className="w-5 h-5" />}
-          color="red"
-        />
-        {/* TODO: fetch real count */}
-        <StatCard
-          title="AI Queries"
-          value={0}
-          subtitle="Today"
-          icon={<Brain className="w-5 h-5" />}
-          color="blue"
+
+        {/* Patient queue + Quick diagnostic */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <PatientQueue appointments={appointments} isLoading={isLoading} />
+          <QuickDiagnosticTool />
+        </div>
+
+        {/* Recent consultations + Drug checker */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <RecentConsultations />
+          <DrugInteractionChecker />
+        </div>
+
+        {/* Patient slide-over */}
+        <PatientSheet
+          appointment={selectedAppt}
+          open={sheetOpen}
+          onClose={() => setSheetOpen(false)}
         />
       </div>
-
-      {/* Today's schedule */}
-      <TodaySchedule
-        appointments={appointments}
-        isLoading={isLoading}
-        onSelect={handleSelectAppt}
-      />
-
-      {/* Patient queue + Quick diagnostic */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <PatientQueue appointments={appointments} isLoading={isLoading} />
-        <QuickDiagnosticTool />
-      </div>
-
-      {/* Recent consultations + Drug checker */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <RecentConsultations />
-        <DrugInteractionChecker />
-      </div>
-
-      {/* Patient slide-over */}
-      <PatientSheet
-        appointment={selectedAppt}
-        open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-      />
-    </div>
     </div>
   )
 }
