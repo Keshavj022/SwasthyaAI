@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 # Add backend to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.appointment_agent import AppointmentAgent
 from orchestrator.base import AgentRequest

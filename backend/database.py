@@ -1,8 +1,7 @@
 """
-Database configuration for offline-first SQLite storage.
-All patient data is stored locally on disk. NOTE: encryption-at-rest
-(e.g. SQLCipher) is a roadmap item and is NOT yet implemented — do not
-claim the database is encrypted until it is.
+Database configuration for local SQLite storage.
+NOTE: encryption-at-rest (e.g. SQLCipher) is a roadmap item and is NOT yet
+implemented — do not claim the database is encrypted until it is.
 """
 
 from sqlalchemy import create_engine

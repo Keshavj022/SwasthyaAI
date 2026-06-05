@@ -1,24 +1,14 @@
-# Database files (contains patient data - never commit)
-/database/*.db
-/database/*.db-journal
-/database/*.db-wal
-/database/*.db-shm
+/database/
 
-# Keep database directory but not contents
-!/database/.gitkeep
-
-# OS
 .DS_Store
-
-# IDEs
 .vscode/
 .idea/
 
-# Local documentation / planning docs (kept out of version control)
 /docs/
-
-# Downloaded AI model weights
 /models/
-
-# Tooling
 .claude-flow/
+
+backend/venv/
+__pycache__/
+*.pyc
+.pytest_cache/

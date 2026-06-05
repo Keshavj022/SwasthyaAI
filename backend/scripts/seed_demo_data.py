@@ -33,7 +33,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # Make the backend package importable when run from anywhere.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import SessionLocal, init_db  # noqa: E402
 from models.user import User  # noqa: E402

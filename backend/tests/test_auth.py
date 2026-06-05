@@ -28,7 +28,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 # Ensure the backend package root is importable when pytest is invoked from here.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import Base, get_db  # noqa: E402  (global Base / get_db dependency)
 from models.user import User  # noqa: E402

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 # Add backend to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.drug_info_agent import DrugInfoAgent
 from orchestrator.base import AgentRequest
